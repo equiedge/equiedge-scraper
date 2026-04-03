@@ -9,7 +9,7 @@ app.use(express.json());
 
 let todaysRacesCache = [];
 
-// Realistic mock runners (so AnalysisService can suggest bets)
+// Realistic mock runners so the app can suggest horses
 const createMockRunners = () => {
   const names = ["Thunder Strike", "Speed Demon", "Golden Arrow", "Silver Bullet", "Midnight Express", "Lucky Charm", "Storm Chaser", "Firefly", "Black Caviar II", "Winx Legacy", "Nature Strip Jr"];
   return Array.from({ length: 12 }, (_, i) => ({
@@ -30,79 +30,70 @@ const createMockRunners = () => {
   }));
 };
 
-async function scrapeBothDays() {
-  const dates = [];
-  const now = new Date();
-  // Force Australian dates (AEDT) - today and tomorrow
-  dates.push(new Date(now.getTime() + 11 * 60 * 60 * 1000).toISOString().split('T')[0]); // today AEDT
-  dates.push(new Date(now.getTime() + 35 * 60 * 60 * 1000).toISOString().split('T')[0]); // tomorrow AEDT
+async function scrapeRaceList() {
+  const todayStr = new Date().toISOString().split('T')[0];
+  console.log(`🔄 Scraping race list for ${todayStr}`);
 
-  console.log(`🔄 Scraping both ${dates[0]} and ${dates[1]} (taking longer for accuracy)`);
+  try {
+    const url = `https://www.skyracingworld.com/form-guide/thoroughbred/${todayStr}`;
+    const { data } = await axios.get(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; EquiEdgeBot/1.0)' }
+    });
 
-  const allRaces = [];
+    const $ = cheerio.load(data);
+    const allRaces = [];
 
-  for (const dateStr of dates) {
-    try {
-      const url = `https://www.skyracingworld.com/form-guide/thoroughbred/${dateStr}`;
-      const { data } = await axios.get(url, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; EquiEdgeBot/1.0)' }
+    const auRegex = /CAULFIELD|RANDWICK|FLEMINGTON|MOONEE VALLEY|ROSEHILL|GOLD COAST|DOOMBEN|ASCOT|BELMONT|EAGLE FARM|WYONG|WARWICK|OAKBANK|CANBERRA|CRANBOURNE|WARRNAMBOOL/i;
+
+    $('a').each((_, el) => {
+      const href = $(el).attr('href');
+      if (!href || !/R\d+/.test(href)) return;
+
+      const raceNumMatch = href.match(/R(\d+)/);
+      if (!raceNumMatch) return;
+      const raceNumber = parseInt(raceNumMatch[1]);
+
+      const linkText = $(el).text().trim();
+      const trackMatch = linkText.match(/([A-Z][A-Z\s|]+?)\s+R\d+/i);
+      let track = trackMatch ? trackMatch[1].trim() : "Unknown";
+
+      if (!auRegex.test(track)) return;
+
+      const distanceMatch = linkText.match(/(\d+)\s*m/);
+      const distance = distanceMatch ? distanceMatch[1] + "m" : "1400m";
+
+      allRaces.push({
+        id: `${track}-R${raceNumber}`,
+        date: new Date(todayStr),
+        track: track,
+        raceNumber: raceNumber,
+        distance: distance,
+        condition: "Good 4",
+        weather: "Fine",
+        runners: createMockRunners()
       });
+    });
 
-      const $ = cheerio.load(data);
+    // Remove duplicates
+    const uniqueRaces = allRaces.filter((race, index, self) =>
+      index === self.findIndex(r => r.track === race.track && r.raceNumber === race.raceNumber)
+    );
 
-      const auRegex = /CAULFIELD|RANDWICK|FLEMINGTON|MOONEE VALLEY|ROSEHILL|GOLD COAST|DOOMBEN|ASCOT|BELMONT|EAGLE FARM|WYONG|WARWICK|OAKBANK|CANBERRA|CRANBOURNE|WARRNAMBOOL|PENOLA|STAWELL|SUNSHINE COAST|MUDGEE|MORNINGTON/i;
+    todaysRacesCache = uniqueRaces;
+    console.log(`✅ SUCCESS — Found ${uniqueRaces.length} races with mock runners`);
+    return uniqueRaces;
 
-      $('a').each((_, el) => {
-        const href = $(el).attr('href');
-        if (!href || !/R\d+/.test(href)) return;
-
-        const raceNumMatch = href.match(/R(\d+)/);
-        if (!raceNumMatch) return;
-        const raceNumber = parseInt(raceNumMatch[1]);
-
-        const linkText = $(el).text().trim();
-        const trackMatch = linkText.match(/([A-Z][A-Z\s|]+?)\s+R\d+/i);
-        let track = trackMatch ? trackMatch[1].trim() : "Unknown Track";
-
-        if (!auRegex.test(track)) return;
-
-        const distanceMatch = linkText.match(/(\d+)\s*m/);
-        const distance = distanceMatch ? distanceMatch[1] + "m" : "1400m";
-
-        allRaces.push({
-          id: `${track}-R${raceNumber}`,
-          date: new Date(dateStr),
-          track: track,
-          raceNumber: raceNumber,
-          distance: distance,
-          condition: "Good 4",
-          weather: "Fine",
-          runners: createMockRunners()
-        });
-      });
-
-      await new Promise(r => setTimeout(r, 1200)); // longer delay between pages
-
-    } catch (e) {
-      console.log(`⚠️ Failed to scrape ${dateStr}`);
-    }
+  } catch (err) {
+    console.error('Scrape failed:', err.message);
+    return [];
   }
-
-  // Remove duplicates
-  const uniqueRaces = allRaces.filter((race, index, self) =>
-    index === self.findIndex(r => r.track === race.track && r.raceNumber === race.raceNumber)
-  );
-
-  todaysRacesCache = uniqueRaces;
-  console.log(`✅ FINAL RESULT: ${uniqueRaces.length} races loaded with mock runners`);
-  return uniqueRaces;
 }
 
 // Routes
 app.get('/today-races', (req, res) => res.json(todaysRacesCache));
 
 app.get('/scrape-now', async (req, res) => {
-  await scrapeBothDays();
+  await scrapeRaceList();
   res.json({ 
     status: 'ok', 
     races: todaysRacesCache.length,
@@ -111,6 +102,6 @@ app.get('/scrape-now', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 EquiEdge scraper (with runners) running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 EquiEdge scraper (working race list + mock runners) running`));
 
 module.exports = app;
