@@ -14,7 +14,7 @@ const lbsToKg = (lbs) => Math.round((parseFloat(lbs) || 57) * 0.453592 * 10) / 1
 
 async function scrapeAllAustralianRaces() {
   const todayStr = new Date().toISOString().split('T')[0];
-  console.log(`🔄 Scraping for ${todayStr}`);
+  console.log(`🔄 Scraping Sky Racing World for ${todayStr}`);
 
   try {
     const indexUrl = `https://www.skyracingworld.com/form-guide/thoroughbred/${todayStr}`;
@@ -25,24 +25,24 @@ async function scrapeAllAustralianRaces() {
     const $ = cheerio.load(data);
     const allRaces = [];
 
-    // Look for h2 headings that contain Australian tracks
-    const australianRegex = /CAULFIELD|RANDWICK|FLEMINGTON|MOONEE VALLEY|ROSEHILL|GOLD COAST|DOOMBEN|ASCOT|BELMONT|EAGLE FARM|WYONG|WARWICK|OAKBANK|CANBERRA|CRANBOURNE|WARRNAMBOOL/i;
+    // Australian tracks regex
+    const auTracks = /CAULFIELD|RANDWICK|FLEMINGTON|MOONEE VALLEY|ROSEHILL|GOLD COAST|DOOMBEN|ASCOT|BELMONT|EAGLE FARM|WYONG|WARWICK|OAKBANK|CANBERRA|CRANBOURNE|WARRNAMBOOL|BALLARAT/i;
 
     $('h2').each((_, el) => {
       const heading = $(el).text().trim();
-      if (!australianRegex.test(heading)) return;
+      if (!auTracks.test(heading)) return;
 
-      const track = heading.split('|')[0]?.trim() || heading.split('–')[0]?.trim() || heading;
+      const track = heading.split('|')[0]?.trim() || heading;
 
-      // Get condition and weather
+      // Condition & weather
       let condition = 'Good 4';
       let weather = 'Fine';
-      const infoText = $(el).nextAll('p').first().text() || $(el).next().text();
-      if (/GOOD|SOFT|HEAVY/i.test(infoText)) condition = infoText.match(/GOOD|SOFT|HEAVY \d?/i)?.[0] || condition;
-      if (/Fine|Cloud|Rain|Overcast/i.test(infoText)) weather = infoText.match(/Fine|Cloud|Rain|Overcast/i)?.[0] || weather;
+      const info = $(el).next().text() || $(el).nextAll('p').first().text();
+      if (/GOOD|SOFT|HEAVY/i.test(info)) condition = info.match(/GOOD|SOFT|HEAVY \d?/i)?.[0] || condition;
+      if (/Fine|Cloud|Rain|Overcast/i.test(info)) weather = info.match(/Fine|Cloud|Rain|Overcast/i)?.[0] || weather;
 
-      // Find race links (they are in <a> tags)
-      $(el).nextAll('ul').first().find('a').each((_, linkEl) => {
+      // Find all race links (including those pointing to next day)
+      $('a').each((_, linkEl) => {
         const href = $(linkEl).attr('href');
         if (!href || !/\/R\d+/.test(href)) return;
 
@@ -55,21 +55,24 @@ async function scrapeAllAustralianRaces() {
         const distanceMatch = linkText.match(/(\d+)\s*m/);
         const distance = distanceMatch ? distanceMatch[1] + "m" : "Unknown";
 
-        allRaces.push({
-          id: `${track}-R${raceNumber}`,
-          date: new Date(todayStr),
-          track: track,
-          raceNumber: raceNumber,
-          distance: distance,
-          condition: condition,
-          weather: weather,
-          runners: []   // Empty for now
-        });
+        // Avoid duplicates
+        if (!allRaces.some(r => r.track === track && r.raceNumber === raceNumber)) {
+          allRaces.push({
+            id: `${track}-R${raceNumber}`,
+            date: new Date(todayStr),
+            track: track,
+            raceNumber: raceNumber,
+            distance: distance,
+            condition: condition,
+            weather: weather,
+            runners: []
+          });
+        }
       });
     });
 
     todaysRacesCache = allRaces;
-    console.log(`✅ Scraped ${allRaces.length} races on ${todayStr}`);
+    console.log(`✅ Scraped ${allRaces.length} races (many links point to next day)`);
     return allRaces;
 
   } catch (err) {
