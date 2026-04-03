@@ -31,8 +31,12 @@ const createMockRunners = () => {
 };
 
 async function scrapeRaceList() {
-  const todayStr = new Date().toISOString().split('T')[0];
-  console.log(`🔄 Scraping race list for ${todayStr}`);
+  // Force correct Australian date (AEDT = UTC + 11 hours)
+  const now = new Date();
+  const aedtDate = new Date(now.getTime() + 11 * 60 * 60 * 1000);
+  const todayStr = aedtDate.toISOString().split('T')[0];
+  
+  console.log(`🔄 Scraping race list for Australian date: ${todayStr}`);
 
   try {
     const url = `https://www.skyracingworld.com/form-guide/thoroughbred/${todayStr}`;
@@ -43,7 +47,7 @@ async function scrapeRaceList() {
     const $ = cheerio.load(data);
     const allRaces = [];
 
-    const auRegex = /CAULFIELD|RANDWICK|FLEMINGTON|MOONEE VALLEY|ROSEHILL|GOLD COAST|DOOMBEN|ASCOT|BELMONT|EAGLE FARM|WYONG|WARWICK|OAKBANK|CANBERRA|CRANBOURNE|WARRNAMBOOL/i;
+    const auRegex = /CAULFIELD|RANDWICK|FLEMINGTON|MOONEE VALLEY|ROSEHILL|GOLD COAST|DOOMBEN|ASCOT|BELMONT|EAGLE FARM|WYONG|WARWICK|OAKBANK|CANBERRA|CRANBOURNE|WARRNAMBOOL|PENOLA|STAWELL|SUNSHINE COAST|MUDGEE|MORNINGTON|NOWRA|ALBANY/i;
 
     $('a').each((_, el) => {
       const href = $(el).attr('href');
@@ -80,7 +84,7 @@ async function scrapeRaceList() {
     );
 
     todaysRacesCache = uniqueRaces;
-    console.log(`✅ SUCCESS — Found ${uniqueRaces.length} races with mock runners`);
+    console.log(`✅ SUCCESS — Found ${uniqueRaces.length} races with mock runners (date: ${todayStr})`);
     return uniqueRaces;
 
   } catch (err) {
@@ -102,6 +106,6 @@ app.get('/scrape-now', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 EquiEdge scraper (working race list + mock runners) running`));
+app.listen(PORT, () => console.log(`🚀 EquiEdge scraper (working version with mock runners) running`));
 
 module.exports = app;
