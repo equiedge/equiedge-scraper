@@ -9,9 +9,9 @@ app.use(express.json());
 
 let todaysRacesCache = [];
 
-// Create realistic mock runners so AnalysisService can actually suggest horses
+// Realistic mock runners (so AnalysisService can suggest bets)
 const createMockRunners = () => {
-  const names = ["Thunder Strike", "Speed Demon", "Golden Arrow", "Silver Bullet", "Midnight Express", "Lucky Charm", "Storm Chaser", "Firefly", "Black Caviar II", "Winx Legacy"];
+  const names = ["Thunder Strike", "Speed Demon", "Golden Arrow", "Silver Bullet", "Midnight Express", "Lucky Charm", "Storm Chaser", "Firefly", "Black Caviar II", "Winx Legacy", "Nature Strip Jr"];
   return Array.from({ length: 12 }, (_, i) => ({
     number: i + 1,
     name: names[i % names.length],
@@ -30,72 +30,79 @@ const createMockRunners = () => {
   }));
 };
 
-async function scrapeAustralianRaces() {
-  const todayStr = new Date().toISOString().split('T')[0];
-  console.log(`🔄 Scraping Sky Racing World for ${todayStr}`);
+async function scrapeBothDays() {
+  const dates = [];
+  const now = new Date();
+  // Force Australian dates (AEDT) - today and tomorrow
+  dates.push(new Date(now.getTime() + 11 * 60 * 60 * 1000).toISOString().split('T')[0]); // today AEDT
+  dates.push(new Date(now.getTime() + 35 * 60 * 60 * 1000).toISOString().split('T')[0]); // tomorrow AEDT
 
-  try {
-    const url = `https://www.skyracingworld.com/form-guide/thoroughbred/${todayStr}`;
-    const { data } = await axios.get(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; EquiEdgeBot/1.0)' }
-    });
+  console.log(`🔄 Scraping both ${dates[0]} and ${dates[1]} (taking longer for accuracy)`);
 
-    const $ = cheerio.load(data);
-    const allRaces = [];
+  const allRaces = [];
 
-    const auRegex = /CAULFIELD|RANDWICK|FLEMINGTON|MOONEE VALLEY|ROSEHILL|GOLD COAST|DOOMBEN|ASCOT|BELMONT|EAGLE FARM|WYONG|WARWICK|OAKBANK|CANBERRA|CRANBOURNE|WARRNAMBOOL/i;
-
-    // Find every race link on the page (they point to tomorrow in many cases)
-    $('a').each((_, el) => {
-      const href = $(el).attr('href');
-      if (!href || !/\/australia\/.*\/R\d+/.test(href)) return;
-
-      const raceNumMatch = href.match(/R(\d+)/);
-      if (!raceNumMatch) return;
-      const raceNumber = parseInt(raceNumMatch[1]);
-
-      // Get track name from nearest h2
-      const trackEl = $(el).closest('div, section').prevAll('h2').first();
-      let track = trackEl.text().trim().split('|')[0] || "Unknown";
-      if (!auRegex.test(track)) return;
-
-      const linkText = $(el).text().trim();
-      const distanceMatch = linkText.match(/(\d+)\s*m/);
-      const distance = distanceMatch ? distanceMatch[1] + "m" : "1400m";
-
-      // Add race with mock runners
-      allRaces.push({
-        id: `${track}-R${raceNumber}`,
-        date: new Date(todayStr),
-        track: track,
-        raceNumber: raceNumber,
-        distance: distance,
-        condition: "Good 4",
-        weather: "Fine",
-        runners: createMockRunners()
+  for (const dateStr of dates) {
+    try {
+      const url = `https://www.skyracingworld.com/form-guide/thoroughbred/${dateStr}`;
+      const { data } = await axios.get(url, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; EquiEdgeBot/1.0)' }
       });
-    });
 
-    // Remove duplicates
-    const uniqueRaces = allRaces.filter((race, index, self) =>
-      index === self.findIndex(r => r.track === race.track && r.raceNumber === race.raceNumber)
-    );
+      const $ = cheerio.load(data);
 
-    todaysRacesCache = uniqueRaces;
-    console.log(`✅ SUCCESS — Found ${uniqueRaces.length} Australian races with runners`);
-    return uniqueRaces;
+      const auRegex = /CAULFIELD|RANDWICK|FLEMINGTON|MOONEE VALLEY|ROSEHILL|GOLD COAST|DOOMBEN|ASCOT|BELMONT|EAGLE FARM|WYONG|WARWICK|OAKBANK|CANBERRA|CRANBOURNE|WARRNAMBOOL|PENOLA|STAWELL|SUNSHINE COAST|MUDGEE|MORNINGTON/i;
 
-  } catch (err) {
-    console.error('Scrape failed:', err.message);
-    return [];
+      $('a').each((_, el) => {
+        const href = $(el).attr('href');
+        if (!href || !/R\d+/.test(href)) return;
+
+        const raceNumMatch = href.match(/R(\d+)/);
+        if (!raceNumMatch) return;
+        const raceNumber = parseInt(raceNumMatch[1]);
+
+        const linkText = $(el).text().trim();
+        const trackMatch = linkText.match(/([A-Z][A-Z\s|]+?)\s+R\d+/i);
+        let track = trackMatch ? trackMatch[1].trim() : "Unknown Track";
+
+        if (!auRegex.test(track)) return;
+
+        const distanceMatch = linkText.match(/(\d+)\s*m/);
+        const distance = distanceMatch ? distanceMatch[1] + "m" : "1400m";
+
+        allRaces.push({
+          id: `${track}-R${raceNumber}`,
+          date: new Date(dateStr),
+          track: track,
+          raceNumber: raceNumber,
+          distance: distance,
+          condition: "Good 4",
+          weather: "Fine",
+          runners: createMockRunners()
+        });
+      });
+
+      await new Promise(r => setTimeout(r, 1200)); // longer delay between pages
+
+    } catch (e) {
+      console.log(`⚠️ Failed to scrape ${dateStr}`);
+    }
   }
+
+  // Remove duplicates
+  const uniqueRaces = allRaces.filter((race, index, self) =>
+    index === self.findIndex(r => r.track === race.track && r.raceNumber === race.raceNumber)
+  );
+
+  todaysRacesCache = uniqueRaces;
+  console.log(`✅ FINAL RESULT: ${uniqueRaces.length} races loaded with mock runners`);
+  return uniqueRaces;
 }
 
 // Routes
 app.get('/today-races', (req, res) => res.json(todaysRacesCache));
 
 app.get('/scrape-now', async (req, res) => {
-  await scrapeAustralianRaces();
+  await scrapeBothDays();
   res.json({ 
     status: 'ok', 
     races: todaysRacesCache.length,
@@ -104,6 +111,6 @@ app.get('/scrape-now', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 EquiEdge scraper running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 EquiEdge scraper (with runners) running on port ${PORT}`));
 
 module.exports = app;
