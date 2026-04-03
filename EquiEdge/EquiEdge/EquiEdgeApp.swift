@@ -1,17 +1,22 @@
-//
-//  EquiEdgeApp.swift
-//  EquiEdge
-//
-//  Created by Marc Ravida on 3/4/2026.
-//
-
 import SwiftUI
+import SwiftData
 
 @main
 struct EquiEdgeApp: App {
+    var sharedModelContainer: ModelContainer = {
+        let schema = Schema([BetRecord.self])
+        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+        do {
+            return try ModelContainer(for: schema, configurations: [modelConfiguration])
+        } catch {
+            fatalError("Could not create ModelContainer: \(error)")
+        }
+    }()
+    
     var body: some Scene {
         WindowGroup {
             ContentView()
         }
+        .modelContainer(sharedModelContainer)
     }
 }
