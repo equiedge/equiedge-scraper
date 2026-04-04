@@ -9,9 +9,9 @@ app.use(express.json());
 
 let todaysRacesCache = [];
 
-// Realistic mock runners (we can improve this later to parse real ones from Racenet)
+// Realistic mock runners (we'll try to parse real ones later)
 const createMockRunners = () => {
-  const names = ["Thunder Strike", "Speed Demon", "Golden Arrow", "Silver Bullet", "Midnight Express", "Lucky Charm", "Storm Chaser", "Firefly", "Black Caviar II", "Winx Legacy", "Nature Strip Jr", "Zac Purton Special"];
+  const names = ["Thunder Strike", "Speed Demon", "Golden Arrow", "Silver Bullet", "Midnight Express", "Lucky Charm", "Storm Chaser", "Firefly", "Black Caviar II", "Winx Legacy", "Nature Strip Jr"];
   return Array.from({ length: 12 }, (_, i) => ({
     number: i + 1,
     name: names[i % names.length],
@@ -31,7 +31,7 @@ const createMockRunners = () => {
 };
 
 async function scrapeRacenet() {
-  console.log(`🔄 Scraping Racenet for today's Australian races`);
+  console.log(`🔄 Scraping Racenet for today's races`);
 
   try {
     const url = "https://www.racenet.com.au/form-guide/horse-racing";
@@ -42,19 +42,21 @@ async function scrapeRacenet() {
     const $ = cheerio.load(data);
     const allRaces = [];
 
-    // Racenet lists meetings on the main form guide page
+    // Target the actual Racenet race links
     $('a[href*="/form-guide/horse-racing/"]').each((_, el) => {
       const href = $(el).attr('href');
-      if (!href || !/\/form-guide\/horse-racing\/[a-z]+-\d+/.test(href)) return;
+      if (!href) return;
+
+      // Extract race number from URL
+      const raceNumMatch = href.match(/R?(\d+)/i);
+      if (!raceNumMatch) return;
+      const raceNumber = parseInt(raceNumMatch[1]);
+
+      // Extract track name from URL slug (e.g. "ascot-20260404" → "Ascot")
+      const slugMatch = href.match(/\/form-guide\/horse-racing\/([a-z]+)-/i);
+      let track = slugMatch ? slugMatch[1].charAt(0).toUpperCase() + slugMatch[1].slice(1) : "Unknown";
 
       const linkText = $(el).text().trim();
-      const trackMatch = linkText.match(/([A-Z][A-Za-z\s]+)/);
-      if (!trackMatch) return;
-
-      const track = trackMatch[1].trim();
-      const raceNumMatch = href.match(/R?(\d+)/i);
-      const raceNumber = raceNumMatch ? parseInt(raceNumMatch[1]) : 1;
-
       const distanceMatch = linkText.match(/(\d+)\s*m/);
       const distance = distanceMatch ? distanceMatch[1] + "m" : "1400m";
 
@@ -66,7 +68,7 @@ async function scrapeRacenet() {
         distance: distance,
         condition: "Good 4",
         weather: "Fine",
-        runners: createMockRunners()   // Real runners can be added later
+        runners: createMockRunners()
       });
     });
 
@@ -76,7 +78,7 @@ async function scrapeRacenet() {
     );
 
     todaysRacesCache = uniqueRaces;
-    console.log(`✅ Racenet scraper success: ${uniqueRaces.length} races loaded`);
+    console.log(`✅ Racenet scraper: Found ${uniqueRaces.length} races`);
     return uniqueRaces;
 
   } catch (err) {
@@ -99,6 +101,6 @@ app.get('/scrape-now', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 EquiEdge Racenet scraper running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 EquiEdge Racenet scraper running`));
 
 module.exports = app;
