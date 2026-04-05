@@ -4,9 +4,9 @@ const fetch = require('node-fetch');
 const app = express();
 app.use(express.json());
 
-// Hardcoded keys as requested
-const FORMAV_API_KEY = 'fk_ebfe108fd32e41f946ad9c583b1cfbc9a0e94829bf7644b7c4a9c5bfd65090bb';
-const XAI_API_KEY = 'xai-DwCbbUpLBogXH0IiiBkAncPUepeL0R6gWhyYsM6zTyEiG0VlF1O8iKibayjcam7QSVJNrCNaYRU89BJL';
+// Use environment variables (set in Vercel)
+const FORMAV_API_KEY = process.env.FORMAV_API_KEY;
+const XAI_API_KEY = process.env.XAI_API_KEY;
 
 let latestRaces = [];
 
@@ -36,14 +36,14 @@ Return ONLY this JSON:
   ]
 }`;
 
-// Two-step FormFav API (exactly as per your docs)
+// Two-step FormFav API (exact from docs)
 async function scrapeFormFav() {
   const today = new Date().toISOString().split('T')[0];
-  console.log('📅 Date sent to FormFav:', today);
+  console.log('📅 Date:', today);
 
   try {
     // Step 1: Get meetings
-    console.log('📡 Step 1: Calling /v1/form/meetings');
+    console.log('📡 Step 1: /v1/form/meetings');
     const meetingsRes = await fetch(`https://api.formfav.com/v1/form/meetings?date=${today}&race_code=gallops`, {
       headers: {
         'X-API-Key': FORMAV_API_KEY,
@@ -55,23 +55,23 @@ async function scrapeFormFav() {
 
     if (!meetingsRes.ok) {
       const text = await meetingsRes.text();
-      console.error('Raw error:', text);
+      console.error('Meetings error:', text);
       return [];
     }
 
     const meetingsData = await meetingsRes.json();
     const meetings = meetingsData.meetings || [];
 
-    console.log('✅ Found', meetings.length, 'meetings');
+    console.log('Found', meetings.length, 'meetings');
 
     // Step 2: Get races for each meeting
     const races = [];
 
     for (const meeting of meetings) {
-      if (meeting.abandoned === true) continue;
+      if (meeting.abandoned) continue;
 
       const slug = meeting.slug;
-      console.log(`📡 Step 2: Calling /v1/form for track: ${slug}`);
+      console.log(`📡 Step 2: /v1/form for ${slug}`);
 
       const formRes = await fetch(`https://api.formfav.com/v1/form?track=${slug}&date=${today}`, {
         headers: {
@@ -88,10 +88,10 @@ async function scrapeFormFav() {
       }
     }
 
-    console.log('✅ Final FormFav returned', races.length, 'races');
+    console.log('✅ Final races returned:', races.length);
     return races;
   } catch (err) {
-    console.error('❌ FormFav scrape crashed:', err.message);
+    console.error('FormFav error:', err.message);
     return [];
   }
 }
@@ -135,7 +135,7 @@ app.all('/scrape-now', async (req, res) => {
     const races = await scrapeFormFav();
 
     if (req.query.ai === 'true' && XAI_API_KEY) {
-      console.log('🚀 Running Grok AI (max 1 horse per race)...');
+      console.log('🚀 Running Grok AI...');
       for (let race of races) {
         race.suggestions = await analyzeRaceWithGrok(race);
       }
@@ -156,12 +156,8 @@ app.all('/scrape-now', async (req, res) => {
   }
 });
 
-app.get('/today-races', (req, res) => {
-  res.json(latestRaces);
-});
+app.get('/today-races', (req, res) => res.json(latestRaces));
 
-app.get('/', (req, res) => {
-  res.json({ status: "ok", message: "EquiEdge scraper running" });
-});
+app.get('/', (req, res) => res.json({ status: "ok" }));
 
 module.exports = app;
