@@ -35,11 +35,15 @@ Return ONLY this JSON:
   ]
 }`;
 
-// ==================== LAST WORKING FORMFAV SCRAPE ====================
+// ==================== FORMFAV SCRAPE WITH DATE LOGGING ====================
 async function scrapeFormFav() {
+  const today = new Date();
+  console.log('🕒 Backend current date/time:', today.toISOString());
+  console.log('🕒 Formatted date for FormFav:', today.toISOString().split('T')[0]);
+
   try {
     console.log('📡 Calling FormFav /races/today...');
-
+    
     const response = await fetch('https://api.formfav.com/races/today', {
       headers: {
         'Authorization': `Bearer ${FORMAV_API_KEY}`,
@@ -65,7 +69,7 @@ async function scrapeFormFav() {
   }
 }
 
-// ==================== GROK AI (only on manual refresh) ====================
+// ==================== GROK AI ====================
 async function analyzeRaceWithGrok(race) {
   if (!XAI_API_KEY) return [];
   try {
@@ -99,12 +103,10 @@ async function analyzeRaceWithGrok(race) {
 // ==================== ENDPOINTS ====================
 app.all('/scrape-now', async (req, res) => {
   try {
-    console.log('🔄 Scrape-now called (ai=' + (req.query.ai || 'false') + ')');
-
     const races = await scrapeFormFav();
 
     if (req.query.ai === 'true' && XAI_API_KEY) {
-      console.log('🚀 Running Grok AI expert analysis (max 1 horse per race)...');
+      console.log('🚀 Running Grok AI (max 1 horse per race)...');
       for (let race of races) {
         race.suggestions = await analyzeRaceWithGrok(race);
       }
@@ -117,7 +119,8 @@ app.all('/scrape-now', async (req, res) => {
     res.json({
       status: "ok",
       races: races.length,
-      source: req.query.ai === 'true' ? "Grok AI + FormFav" : "FormFav"
+      source: req.query.ai === 'true' ? "Grok AI + FormFav" : "FormFav",
+      date: new Date().toISOString().split('T')[0]
     });
   } catch (err) {
     console.error(err);
