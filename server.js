@@ -1,4 +1,5 @@
 const express = require('express');
+const fetch = require('node-fetch');
 
 const app = express();
 app.use(express.json());
@@ -34,9 +35,11 @@ Return ONLY this JSON:
   ]
 }`;
 
-// Pure FormFav scrape (no mock)
+// ==================== LAST WORKING FORMFAV SCRAPE ====================
 async function scrapeFormFav() {
   try {
+    console.log('📡 Calling FormFav /races/today...');
+
     const response = await fetch('https://api.formfav.com/races/today', {
       headers: {
         'Authorization': `Bearer ${FORMAV_API_KEY}`,
@@ -44,24 +47,25 @@ async function scrapeFormFav() {
       }
     });
 
-    console.log('FormFav status:', response.status);
+    console.log('FormFav HTTP status:', response.status);
 
     if (!response.ok) {
-      console.error('FormFav error:', response.status);
+      console.error('❌ FormFav HTTP error:', response.status);
       return [];
     }
 
     const data = await response.json();
     const races = Array.isArray(data) ? data : (data.races || []);
-    console.log('FormFav returned', races.length, 'races');
+    
+    console.log('✅ FormFav returned', races.length, 'races');
     return races;
   } catch (err) {
-    console.error('FormFav scrape failed:', err.message);
+    console.error('❌ FormFav scrape crashed:', err.message);
     return [];
   }
 }
 
-// Grok AI
+// ==================== GROK AI (only on manual refresh) ====================
 async function analyzeRaceWithGrok(race) {
   if (!XAI_API_KEY) return [];
   try {
@@ -92,7 +96,7 @@ async function analyzeRaceWithGrok(race) {
   }
 }
 
-// Routes - accept both GET and POST
+// ==================== ENDPOINTS ====================
 app.all('/scrape-now', async (req, res) => {
   try {
     console.log('🔄 Scrape-now called (ai=' + (req.query.ai || 'false') + ')');
@@ -100,7 +104,7 @@ app.all('/scrape-now', async (req, res) => {
     const races = await scrapeFormFav();
 
     if (req.query.ai === 'true' && XAI_API_KEY) {
-      console.log('🚀 Running Grok AI (max 1 horse per race)...');
+      console.log('🚀 Running Grok AI expert analysis (max 1 horse per race)...');
       for (let race of races) {
         race.suggestions = await analyzeRaceWithGrok(race);
       }
@@ -116,7 +120,7 @@ app.all('/scrape-now', async (req, res) => {
       source: req.query.ai === 'true' ? "Grok AI + FormFav" : "FormFav"
     });
   } catch (err) {
-    console.error('Crash in /scrape-now:', err);
+    console.error(err);
     res.status(500).json({ status: "error", message: err.message });
   }
 });
