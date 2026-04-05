@@ -35,40 +35,33 @@ Return ONLY this JSON:
   ]
 }`;
 
-// ==================== LAST WORKING FORMFAV SCRAPE ====================
+// ==================== CORRECT FORMFAV SCRAPE (last working state) ====================
 async function scrapeFormFav() {
   try {
-    console.log('📡 [FormFav] Calling /races/today...');
-    console.log('📅 Current backend date:', new Date().toISOString());
+    console.log('📡 [FormFav] Calling correct endpoint with today\'s date...');
+    const today = new Date().toISOString().split('T')[0];
+    console.log('📅 Date being sent to FormFav:', today);
 
-    const response = await fetch('https://api.formfav.com/races/today', {
+    const response = await fetch(`https://api.formfav.com/races/today?date=${today}`, {
       headers: {
         'Authorization': `Bearer ${FORMAV_API_KEY}`,
         'Accept': 'application/json'
       }
     });
 
-    console.log('✅ FormFav HTTP status:', response.status);
-
-    const rawText = await response.text();
-    console.log('📄 FormFav raw response (first 800 chars):', rawText.substring(0, 800));
+    console.log('FormFav HTTP status:', response.status);
 
     if (!response.ok) {
       console.error('❌ FormFav HTTP error:', response.status);
+      const text = await response.text();
+      console.error('Raw error response:', text);
       return [];
     }
 
-    let data;
-    try {
-      data = JSON.parse(rawText);
-    } catch (e) {
-      console.error('❌ FormFav JSON parse failed');
-      return [];
-    }
-
+    const data = await response.json();
     const races = Array.isArray(data) ? data : (data.races || []);
+    
     console.log('✅ FormFav successfully returned', races.length, 'races');
-
     return races;
   } catch (err) {
     console.error('❌ FormFav scrape crashed:', err.message);
