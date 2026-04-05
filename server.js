@@ -4,8 +4,9 @@ const fetch = require('node-fetch');
 const app = express();
 app.use(express.json());
 
-const FORMAV_API_KEY = process.env.FORMAV_API_KEY;
-const XAI_API_KEY = process.env.XAI_API_KEY;
+// Hardcoded keys as requested
+const FORMAV_API_KEY = 'fk_ebfe108fd32e41f946ad9c583b1cfbc9a0e94829bf7644b7c4a9c5bfd65090bb';
+const XAI_API_KEY = 'xai-DwCbbUpLBogXH0IiiBkAncPUepeL0R6gWhyYsM6zTyEiG0VlF1O8iKibayjcam7QSVJNrCNaYRU89BJL';
 
 let latestRaces = [];
 
@@ -30,44 +31,48 @@ Return ONLY this JSON:
       "horseName": "Exact horse name",
       "confidence": 47,
       "units": 5,
-      "reason": "Detailed expert explanation"
+      "reason": "Strong recent win in higher class on similar ground. Excellent barrier today, trainer in form, perfectly suited to trip."
     }
   ]
 }`;
 
-// FormFav - exact from your docs
+// Two-step FormFav API (exactly as per your docs)
 async function scrapeFormFav() {
   const today = new Date().toISOString().split('T')[0];
-  console.log('📅 Date:', today);
+  console.log('📅 Date sent to FormFav:', today);
 
   try {
-    console.log('📡 Calling FormFav /v1/form/meetings with X-API-Key');
-    const res = await fetch(`https://api.formfav.com/v1/form/meetings?date=${today}&race_code=gallops`, {
+    // Step 1: Get meetings
+    console.log('📡 Step 1: Calling /v1/form/meetings');
+    const meetingsRes = await fetch(`https://api.formfav.com/v1/form/meetings?date=${today}&race_code=gallops`, {
       headers: {
         'X-API-Key': FORMAV_API_KEY,
         'Accept': 'application/json'
       }
     });
 
-    console.log('Meetings status:', res.status);
+    console.log('Meetings status:', meetingsRes.status);
 
-    if (!res.ok) {
-      const text = await res.text();
+    if (!meetingsRes.ok) {
+      const text = await meetingsRes.text();
       console.error('Raw error:', text);
       return [];
     }
 
-    const data = await res.json();
-    const meetings = data.meetings || [];
+    const meetingsData = await meetingsRes.json();
+    const meetings = meetingsData.meetings || [];
 
-    console.log('Found', meetings.length, 'meetings');
+    console.log('✅ Found', meetings.length, 'meetings');
 
+    // Step 2: Get races for each meeting
     const races = [];
 
     for (const meeting of meetings) {
-      if (meeting.abandoned) continue;
+      if (meeting.abandoned === true) continue;
 
       const slug = meeting.slug;
+      console.log(`📡 Step 2: Calling /v1/form for track: ${slug}`);
+
       const formRes = await fetch(`https://api.formfav.com/v1/form?track=${slug}&date=${today}`, {
         headers: {
           'X-API-Key': FORMAV_API_KEY,
@@ -77,14 +82,47 @@ async function scrapeFormFav() {
 
       if (formRes.ok) {
         const formData = await formRes.json();
-        if (formData.races) races.push(...formData.races);
+        if (formData.races && Array.isArray(formData.races)) {
+          races.push(...formData.races);
+        }
       }
     }
 
-    console.log('✅ Final races returned:', races.length);
+    console.log('✅ Final FormFav returned', races.length, 'races');
     return races;
   } catch (err) {
-    console.error('FormFav error:', err.message);
+    console.error('❌ FormFav scrape crashed:', err.message);
+    return [];
+  }
+}
+
+// Grok AI
+async function analyzeRaceWithGrok(race) {
+  if (!XAI_API_KEY) return [];
+  try {
+    const aiResponse = await fetch('https://api.x.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${XAI_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: "grok-beta",
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: `Analyze this race and return at most one elite selection only if there is a genuine edge:\n${JSON.stringify(race, null, 2)}` }
+        ],
+        temperature: 0.3,
+        max_tokens: 800
+      })
+    });
+
+    const data = await aiResponse.json();
+    const aiText = data.choices[0].message.content.trim();
+    const aiResult = JSON.parse(aiText);
+    return aiResult.selections || [];
+  } catch (err) {
+    console.error('Grok AI failed:', err.message);
     return [];
   }
 }
@@ -92,15 +130,17 @@ async function scrapeFormFav() {
 // Endpoints
 app.all('/scrape-now', async (req, res) => {
   try {
+    console.log('🔄 Scrape-now called (ai=' + (req.query.ai || 'false') + ')');
+
     const races = await scrapeFormFav();
 
     if (req.query.ai === 'true' && XAI_API_KEY) {
-      console.log('🚀 Running Grok AI...');
+      console.log('🚀 Running Grok AI (max 1 horse per race)...');
       for (let race of races) {
         race.suggestions = await analyzeRaceWithGrok(race);
       }
     } else {
-      races.forEach(r => r.suggestions = []);
+      races.forEach(r => { r.suggestions = []; });
     }
 
     latestRaces = races;
@@ -116,13 +156,12 @@ app.all('/scrape-now', async (req, res) => {
   }
 });
 
-async function analyzeRaceWithGrok(race) {
-  // ... (same as before)
-  // (I omitted the full function for brevity - keep the same one you had)
-  return [];
-}
+app.get('/today-races', (req, res) => {
+  res.json(latestRaces);
+});
 
-app.get('/today-races', (req, res) => res.json(latestRaces));
-app.get('/', (req, res) => res.json({ status: "ok" }));
+app.get('/', (req, res) => {
+  res.json({ status: "ok", message: "EquiEdge scraper running" });
+});
 
 module.exports = app;
