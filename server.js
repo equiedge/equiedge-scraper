@@ -55,7 +55,7 @@ async function scrapeFormFav() {
   }
 }
 
-// Grok AI analysis (only called on manual refresh)
+// Grok AI analysis
 async function analyzeRaceWithGrok(race) {
   if (!XAI_API_KEY) return [];
 
@@ -87,8 +87,7 @@ async function analyzeRaceWithGrok(race) {
   }
 }
 
-// === ENDPOINTS ===
-
+// Endpoints
 app.post('/scrape-now', async (req, res) => {
   try {
     console.log('🔄 Manual scrape triggered');
@@ -126,5 +125,5 @@ app.get('/', (req, res) => {
   res.json({ status: "ok", message: "EquiEdge scraper is running" });
 });
 
-// IMPORTANT: Export the app for Vercel serverless
+// REQUIRED FOR VERCEL SERVERLESS
 module.exports = app;
