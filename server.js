@@ -35,34 +35,43 @@ Return ONLY this JSON:
   ]
 }`;
 
-// ==================== PURE FORMFAV SCRAPE (last working state) ====================
+// ==================== MULTI-ENDPOINT FORMFAV SCRAPE ====================
 async function scrapeFormFav() {
-  try {
-    console.log('📡 [FormFav] Calling /races/today (no date parameter)...');
+  const today = new Date().toISOString().split('T')[0];
+  console.log('📅 Today’s date:', today);
 
-    const response = await fetch('https://api.formfav.com/races/today', {
-      headers: {
-        'Authorization': `Bearer ${FORMAV_API_KEY}`,
-        'Accept': 'application/json'
+  const endpoints = [
+    'https://api.formfav.com/races/today',
+    `https://api.formfav.com/races?date=${today}`,
+    'https://api.formfav.com/meetings',
+    'https://api.formfav.com/races'
+  ];
+
+  for (const url of endpoints) {
+    try {
+      console.log(`📡 Trying FormFav endpoint: ${url}`);
+      const response = await fetch(url, {
+        headers: {
+          'Authorization': `Bearer ${FORMAV_API_KEY}`,
+          'Accept': 'application/json'
+        }
+      });
+
+      console.log(`   → Status: ${response.status}`);
+
+      if (response.ok) {
+        const data = await response.json();
+        const races = Array.isArray(data) ? data : (data.races || data.meetings || []);
+        console.log(`✅ SUCCESS – FormFav returned ${races.length} races from ${url}`);
+        return races;
       }
-    });
-
-    console.log('FormFav HTTP status:', response.status);
-
-    if (!response.ok) {
-      console.error('❌ FormFav HTTP error:', response.status);
-      return [];
+    } catch (err) {
+      console.error(`   → Failed: ${err.message}`);
     }
-
-    const data = await response.json();
-    const races = Array.isArray(data) ? data : (data.races || []);
-    
-    console.log('✅ FormFav successfully returned', races.length, 'races');
-    return races;
-  } catch (err) {
-    console.error('❌ FormFav scrape crashed:', err.message);
-    return [];
   }
+
+  console.error('❌ All FormFav endpoints failed');
+  return [];
 }
 
 // Grok AI (only on manual refresh)
