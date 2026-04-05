@@ -36,31 +36,27 @@ Return ONLY valid JSON:
   ]
 }`;
 
+
 // FormFav scrape
 async function scrapeFormFav() {
   try {
-    const response = await fetch('https://api.formfav.com/races/today', {
-      headers: {
-        'Authorization': `Bearer ${FORMAV_API_KEY}`,
-        'Accept': 'application/json'
-      }
+    const res = await fetch('https://api.formfav.com/races/today', {
+      headers: { 'Authorization': `Bearer ${FORMAV_API_KEY}` }
     });
-
-    if (!response.ok) throw new Error(`FormFav HTTP ${response.status}`);
-    const data = await response.json();
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
     return Array.isArray(data) ? data : (data.races || []);
-  } catch (err) {
-    console.error('FormFav scrape failed:', err.message);
+  } catch (e) {
+    console.error('FormFav error:', e.message);
     return [];
   }
 }
 
-// Grok AI analysis
+// Grok AI
 async function analyzeRaceWithGrok(race) {
   if (!XAI_API_KEY) return [];
-
   try {
-    const aiResponse = await fetch('https://api.x.ai/v1/chat/completions', {
+    const res = await fetch('https://api.x.ai/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${XAI_API_KEY}`,
@@ -70,37 +66,35 @@ async function analyzeRaceWithGrok(race) {
         model: "grok-beta",
         messages: [
           { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: `Analyze this race and return at most one elite selection only if there is a genuine edge:\n${JSON.stringify(race, null, 2)}` }
+          { role: "user", content: `Analyze this race:\n${JSON.stringify(race, null, 2)}` }
         ],
         temperature: 0.3,
-        max_tokens: 800
+        max_tokens: 700
       })
     });
 
-    const data = await aiResponse.json();
-    const aiText = data.choices[0].message.content.trim();
-    const aiResult = JSON.parse(aiText);
-    return aiResult.selections || [];
-  } catch (err) {
-    console.error(`Grok AI failed for ${race.track || 'Unknown'} R${race.raceNumber || ''}:`, err.message);
+    const data = await res.json();
+    const text = data.choices[0].message.content.trim();
+    const result = JSON.parse(text);
+    return result.selections || [];
+  } catch (e) {
+    console.error('Grok AI error:', e.message);
     return [];
   }
 }
 
-// Endpoints
+// Routes
 app.post('/scrape-now', async (req, res) => {
   try {
-    console.log('🔄 Manual scrape triggered');
-
     let races = await scrapeFormFav();
 
     if (req.query.ai === 'true' && XAI_API_KEY) {
-      console.log('🚀 Running Grok AI expert analysis (max 1 horse per race)...');
+      console.log('🚀 Running Grok AI...');
       for (let race of races) {
         race.suggestions = await analyzeRaceWithGrok(race);
       }
     } else {
-      races.forEach(r => { r.suggestions = []; });
+      races.forEach(r => r.suggestions = []);
     }
 
     latestRaces = races;
@@ -108,11 +102,10 @@ app.post('/scrape-now', async (req, res) => {
     res.json({
       status: "ok",
       races: races.length,
-      source: req.query.ai === 'true' ? "Grok AI + FormFav" : "FormFav",
-      date: new Date().toISOString().split('T')[0]
+      source: req.query.ai === 'true' ? "Grok AI" : "FormFav"
     });
   } catch (err) {
-    console.error('Scrape error:', err);
+    console.error(err);
     res.status(500).json({ status: "error", message: err.message });
   }
 });
@@ -121,9 +114,7 @@ app.get('/today-races', (req, res) => {
   res.json(latestRaces);
 });
 
-app.get('/', (req, res) => {
-  res.json({ status: "ok", message: "EquiEdge scraper is running" });
-});
+app.get('/', (req, res) => res.json({ status: "ok" }));
 
-// REQUIRED FOR VERCEL SERVERLESS
+// Required for Vercel
 module.exports = app;
