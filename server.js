@@ -35,14 +35,12 @@ Return ONLY this JSON:
   ]
 }`;
 
-// ==================== CORRECT FORMFAV SCRAPE (last working state) ====================
+// ==================== PURE FORMFAV SCRAPE (last working state) ====================
 async function scrapeFormFav() {
   try {
-    console.log('📡 [FormFav] Calling correct endpoint with today\'s date...');
-    const today = new Date().toISOString().split('T')[0];
-    console.log('📅 Date being sent to FormFav:', today);
+    console.log('📡 [FormFav] Calling /races/today (no date parameter)...');
 
-    const response = await fetch(`https://api.formfav.com/races/today?date=${today}`, {
+    const response = await fetch('https://api.formfav.com/races/today', {
       headers: {
         'Authorization': `Bearer ${FORMAV_API_KEY}`,
         'Accept': 'application/json'
@@ -53,8 +51,6 @@ async function scrapeFormFav() {
 
     if (!response.ok) {
       console.error('❌ FormFav HTTP error:', response.status);
-      const text = await response.text();
-      console.error('Raw error response:', text);
       return [];
     }
 
@@ -121,8 +117,7 @@ app.all('/scrape-now', async (req, res) => {
     res.json({
       status: "ok",
       races: races.length,
-      source: req.query.ai === 'true' ? "Grok AI + FormFav" : "FormFav",
-      date: new Date().toISOString().split('T')[0]
+      source: req.query.ai === 'true' ? "Grok AI + FormFav" : "FormFav"
     });
   } catch (err) {
     console.error(err);
