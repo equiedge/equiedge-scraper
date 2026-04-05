@@ -23,19 +23,17 @@ For the selected horse include:
 - units: integer 1-10 (bet size based on confidence)
 - reason: detailed expert explanation (form quality, class of previous races, track/condition match, barrier, weight, trainer/jockey, distance, etc.)
 
-Return ONLY valid JSON:
-
+Return ONLY this JSON:
 {
   "selections": [
     {
       "horseName": "Exact horse name",
       "confidence": 47,
       "units": 5,
-      "reason": "Strong recent win in higher class on similar ground. Excellent barrier today, trainer in form, perfectly suited to trip."
+      "reason": "Strong recent win in higher class. Excellent barrier today, trainer in form."
     }
   ]
 }`;
-
 
 // FormFav scrape
 async function scrapeFormFav() {
@@ -83,18 +81,20 @@ async function analyzeRaceWithGrok(race) {
   }
 }
 
-// Routes
-app.post('/scrape-now', async (req, res) => {
+// Routes - accept both GET and POST for easy testing
+app.all('/scrape-now', async (req, res) => {
   try {
+    console.log('🔄 Scrape-now called (method:', req.method, 'ai=', req.query.ai, ')');
+
     let races = await scrapeFormFav();
 
     if (req.query.ai === 'true' && XAI_API_KEY) {
-      console.log('🚀 Running Grok AI...');
+      console.log('🚀 Running Grok AI expert analysis (max 1 horse per race)...');
       for (let race of races) {
         race.suggestions = await analyzeRaceWithGrok(race);
       }
     } else {
-      races.forEach(r => r.suggestions = []);
+      races.forEach(r => { r.suggestions = []; });
     }
 
     latestRaces = races;
@@ -102,10 +102,10 @@ app.post('/scrape-now', async (req, res) => {
     res.json({
       status: "ok",
       races: races.length,
-      source: req.query.ai === 'true' ? "Grok AI" : "FormFav"
+      source: req.query.ai === 'true' ? "Grok AI + FormFav" : "FormFav"
     });
   } catch (err) {
-    console.error(err);
+    console.error('Scrape error:', err);
     res.status(500).json({ status: "error", message: err.message });
   }
 });
@@ -114,7 +114,9 @@ app.get('/today-races', (req, res) => {
   res.json(latestRaces);
 });
 
-app.get('/', (req, res) => res.json({ status: "ok" }));
+app.get('/', (req, res) => {
+  res.json({ status: "ok", message: "EquiEdge scraper running" });
+});
 
 // Required for Vercel
 module.exports = app;
