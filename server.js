@@ -27,34 +27,41 @@ Return ONLY this JSON:
 {
   "selections": [
     {
-      "horseName": "Exact horse name",
+      "horseName": "Exact horse name from the data",
       "confidence": 47,
       "units": 5,
-      "reason": "Strong recent win in higher class. Excellent barrier today, trainer in form."
+      "reason": "Strong recent win in higher class on similar ground. Excellent barrier today, trainer in form, perfectly suited to trip."
     }
   ]
 }`;
 
-// FormFav scrape
+// ==================== WORKING FORMFAV SCRAPE ====================
 async function scrapeFormFav() {
   try {
-    const res = await fetch('https://api.formfav.com/races/today', {
-      headers: { 'Authorization': `Bearer ${FORMAV_API_KEY}` }
+    const response = await fetch('https://api.formfav.com/races/today', {
+      headers: {
+        'Authorization': `Bearer ${FORMAV_API_KEY}`,
+        'Accept': 'application/json'
+      }
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
+
+    if (!response.ok) throw new Error(`FormFav HTTP ${response.status}`);
+
+    const data = await response.json();
+    // FormFav sometimes returns {races: [...]} or direct array
     return Array.isArray(data) ? data : (data.races || []);
-  } catch (e) {
-    console.error('FormFav error:', e.message);
+  } catch (err) {
+    console.error('FormFav scrape failed:', err.message);
     return [];
   }
 }
 
-// Grok AI
+// ==================== GROK AI ====================
 async function analyzeRaceWithGrok(race) {
   if (!XAI_API_KEY) return [];
+
   try {
-    const res = await fetch('https://api.x.ai/v1/chat/completions', {
+    const aiResponse = await fetch('https://api.x.ai/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${XAI_API_KEY}`,
@@ -64,27 +71,27 @@ async function analyzeRaceWithGrok(race) {
         model: "grok-beta",
         messages: [
           { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: `Analyze this race:\n${JSON.stringify(race, null, 2)}` }
+          { role: "user", content: `Analyze this race and return at most one elite selection only if there is a genuine edge:\n${JSON.stringify(race, null, 2)}` }
         ],
         temperature: 0.3,
-        max_tokens: 700
+        max_tokens: 800
       })
     });
 
-    const data = await res.json();
-    const text = data.choices[0].message.content.trim();
-    const result = JSON.parse(text);
-    return result.selections || [];
-  } catch (e) {
-    console.error('Grok AI error:', e.message);
+    const data = await aiResponse.json();
+    const aiText = data.choices[0].message.content.trim();
+    const aiResult = JSON.parse(aiText);
+    return aiResult.selections || [];
+  } catch (err) {
+    console.error(`Grok AI failed for ${race.track || 'Unknown'} R${race.raceNumber || ''}:`, err.message);
     return [];
   }
 }
 
-// Routes - accept both GET and POST for easy testing
+// ==================== ENDPOINTS ====================
 app.all('/scrape-now', async (req, res) => {
   try {
-    console.log('🔄 Scrape-now called (method:', req.method, 'ai=', req.query.ai, ')');
+    console.log('🔄 Scrape-now called (ai=' + (req.query.ai || 'false') + ')');
 
     let races = await scrapeFormFav();
 
@@ -105,7 +112,7 @@ app.all('/scrape-now', async (req, res) => {
       source: req.query.ai === 'true' ? "Grok AI + FormFav" : "FormFav"
     });
   } catch (err) {
-    console.error('Scrape error:', err);
+    console.error(err);
     res.status(500).json({ status: "error", message: err.message });
   }
 });
