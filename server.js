@@ -35,46 +35,67 @@ Return ONLY this JSON:
   ]
 }`;
 
-// ==================== MULTI-ENDPOINT FORMFAV SCRAPE ====================
+// ==================== TWO-STEP FORMFAV SCRAPE (exact from your docs) ====================
 async function scrapeFormFav() {
   const today = new Date().toISOString().split('T')[0];
-  console.log('📅 Today’s date:', today);
+  console.log('📅 Date sent to FormFav:', today);
 
-  const endpoints = [
-    'https://api.formfav.com/races/today',
-    `https://api.formfav.com/races?date=${today}`,
-    'https://api.formfav.com/meetings',
-    'https://api.formfav.com/races'
-  ];
+  try {
+    // Step 1: Get meetings
+    console.log('📡 Step 1: Calling /v1/form/meetings');
+    const meetingsRes = await fetch(`https://api.formfav.com/v1/form/meetings?date=${today}&race_code=gallops`, {
+      headers: {
+        'X-API-Key': FORMAV_API_KEY,
+        'Accept': 'application/json'
+      }
+    });
 
-  for (const url of endpoints) {
-    try {
-      console.log(`📡 Trying FormFav endpoint: ${url}`);
-      const response = await fetch(url, {
+    console.log('Meetings status:', meetingsRes.status);
+
+    if (!meetingsRes.ok) {
+      console.error('❌ Meetings endpoint failed');
+      return [];
+    }
+
+    const meetingsData = await meetingsRes.json();
+    const meetings = meetingsData.meetings || [];
+
+    console.log('✅ Found', meetings.length, 'meetings');
+
+    // Step 2: Get races for each meeting
+    const races = [];
+
+    for (const meeting of meetings) {
+      if (meeting.abandoned) continue; // skip cancelled meetings
+
+      const slug = meeting.slug;
+      console.log(`📡 Step 2: Calling /v1/form for track slug: ${slug}`);
+
+      const formRes = await fetch(`https://api.formfav.com/v1/form?track=${slug}&date=${today}`, {
         headers: {
-          'Authorization': `Bearer ${FORMAV_API_KEY}`,
+          'X-API-Key': FORMAV_API_KEY,
           'Accept': 'application/json'
         }
       });
 
-      console.log(`   → Status: ${response.status}`);
-
-      if (response.ok) {
-        const data = await response.json();
-        const races = Array.isArray(data) ? data : (data.races || data.meetings || []);
-        console.log(`✅ SUCCESS – FormFav returned ${races.length} races from ${url}`);
-        return races;
+      if (formRes.ok) {
+        const formData = await formRes.json();
+        // FormFav /v1/form returns races
+        if (formData.races && Array.isArray(formData.races)) {
+          races.push(...formData.races);
+        }
       }
-    } catch (err) {
-      console.error(`   → Failed: ${err.message}`);
     }
-  }
 
-  console.error('❌ All FormFav endpoints failed');
-  return [];
+    console.log('✅ Final FormFav returned', races.length, 'races');
+    return races;
+  } catch (err) {
+    console.error('❌ FormFav scrape crashed:', err.message);
+    return [];
+  }
 }
 
-// Grok AI (only on manual refresh)
+// Grok AI
 async function analyzeRaceWithGrok(race) {
   if (!XAI_API_KEY) return [];
   try {
