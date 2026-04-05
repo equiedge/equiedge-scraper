@@ -9,7 +9,7 @@ const XAI_API_KEY = process.env.XAI_API_KEY;
 
 let latestRaces = [];
 
-// Strict Grok AI Prompt (max 1 horse per race, only if real edge)
+/ Strict Grok AI Prompt (max 1 horse per race, only if real edge)
 const SYSTEM_PROMPT = `You are an elite Australian horse racing analyst with 20+ years experience.
 Be extremely strict and conservative.
 
@@ -23,11 +23,12 @@ For the selected horse include:
 - units: integer 1-10 (bet size based on confidence)
 - reason: detailed expert explanation (form quality, class of previous races, track/condition match, barrier, weight, trainer/jockey, distance, etc.)
 
+
 Return ONLY this JSON:
 {
   "selections": [
     {
-      "horseName": "Exact horse name from the data",
+      "horseName": "Exact horse name",
       "confidence": 47,
       "units": 5,
       "reason": "Strong recent win in higher class on similar ground. Excellent barrier today, trainer in form, perfectly suited to trip."
@@ -35,9 +36,11 @@ Return ONLY this JSON:
   ]
 }`;
 
-// ==================== WORKING FORMFAV SCRAPE ====================
+// ==================== PURE FORMFAV SCRAPE (no mock) ====================
 async function scrapeFormFav() {
   try {
+    console.log('📡 Calling FormFav /races/today...');
+    
     const response = await fetch('https://api.formfav.com/races/today', {
       headers: {
         'Authorization': `Bearer ${FORMAV_API_KEY}`,
@@ -45,13 +48,31 @@ async function scrapeFormFav() {
       }
     });
 
-    if (!response.ok) throw new Error(`FormFav HTTP ${response.status}`);
+    console.log('✅ FormFav HTTP status:', response.status);
 
-    const data = await response.json();
-    // FormFav sometimes returns {races: [...]} or direct array
-    return Array.isArray(data) ? data : (data.races || []);
+    const rawText = await response.text();
+    console.log('FormFav raw response (first 500 chars):', rawText.substring(0, 500));
+
+    if (!response.ok) {
+      console.error('❌ FormFav HTTP error:', response.status);
+      return [];
+    }
+
+    let data;
+    try {
+      data = JSON.parse(rawText);
+    } catch (e) {
+      console.error('❌ FormFav JSON parse failed');
+      return [];
+    }
+
+    console.log('FormFav response structure keys:', Object.keys(data));
+    const races = Array.isArray(data) ? data : (data.races || []);
+    console.log('✅ FormFav returned', races.length, 'races');
+
+    return races;
   } catch (err) {
-    console.error('FormFav scrape failed:', err.message);
+    console.error('❌ FormFav scrape crashed:', err.message);
     return [];
   }
 }
@@ -59,7 +80,6 @@ async function scrapeFormFav() {
 // ==================== GROK AI ====================
 async function analyzeRaceWithGrok(race) {
   if (!XAI_API_KEY) return [];
-
   try {
     const aiResponse = await fetch('https://api.x.ai/v1/chat/completions', {
       method: 'POST',
@@ -83,7 +103,7 @@ async function analyzeRaceWithGrok(race) {
     const aiResult = JSON.parse(aiText);
     return aiResult.selections || [];
   } catch (err) {
-    console.error(`Grok AI failed for ${race.track || 'Unknown'} R${race.raceNumber || ''}:`, err.message);
+    console.error('Grok AI failed:', err.message);
     return [];
   }
 }
@@ -93,7 +113,7 @@ app.all('/scrape-now', async (req, res) => {
   try {
     console.log('🔄 Scrape-now called (ai=' + (req.query.ai || 'false') + ')');
 
-    let races = await scrapeFormFav();
+    const races = await scrapeFormFav();
 
     if (req.query.ai === 'true' && XAI_API_KEY) {
       console.log('🚀 Running Grok AI expert analysis (max 1 horse per race)...');
@@ -125,5 +145,4 @@ app.get('/', (req, res) => {
   res.json({ status: "ok", message: "EquiEdge scraper running" });
 });
 
-// Required for Vercel
 module.exports = app;
