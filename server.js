@@ -35,15 +35,12 @@ Return ONLY this JSON:
   ]
 }`;
 
-// ==================== FORMFAV SCRAPE WITH DATE LOGGING ====================
+// ==================== LAST WORKING FORMFAV SCRAPE ====================
 async function scrapeFormFav() {
-  const today = new Date();
-  console.log('🕒 Backend current date/time:', today.toISOString());
-  console.log('🕒 Formatted date for FormFav:', today.toISOString().split('T')[0]);
-
   try {
-    console.log('📡 Calling FormFav /races/today...');
-    
+    console.log('📡 [FormFav] Calling /races/today...');
+    console.log('📅 Current backend date:', new Date().toISOString());
+
     const response = await fetch('https://api.formfav.com/races/today', {
       headers: {
         'Authorization': `Bearer ${FORMAV_API_KEY}`,
@@ -51,17 +48,27 @@ async function scrapeFormFav() {
       }
     });
 
-    console.log('FormFav HTTP status:', response.status);
+    console.log('✅ FormFav HTTP status:', response.status);
+
+    const rawText = await response.text();
+    console.log('📄 FormFav raw response (first 800 chars):', rawText.substring(0, 800));
 
     if (!response.ok) {
       console.error('❌ FormFav HTTP error:', response.status);
       return [];
     }
 
-    const data = await response.json();
+    let data;
+    try {
+      data = JSON.parse(rawText);
+    } catch (e) {
+      console.error('❌ FormFav JSON parse failed');
+      return [];
+    }
+
     const races = Array.isArray(data) ? data : (data.races || []);
-    
-    console.log('✅ FormFav returned', races.length, 'races');
+    console.log('✅ FormFav successfully returned', races.length, 'races');
+
     return races;
   } catch (err) {
     console.error('❌ FormFav scrape crashed:', err.message);
@@ -69,7 +76,7 @@ async function scrapeFormFav() {
   }
 }
 
-// ==================== GROK AI ====================
+// Grok AI (only on manual refresh)
 async function analyzeRaceWithGrok(race) {
   if (!XAI_API_KEY) return [];
   try {
@@ -100,9 +107,11 @@ async function analyzeRaceWithGrok(race) {
   }
 }
 
-// ==================== ENDPOINTS ====================
+// Endpoints
 app.all('/scrape-now', async (req, res) => {
   try {
+    console.log('🔄 Scrape-now called (ai=' + (req.query.ai || 'false') + ')');
+
     const races = await scrapeFormFav();
 
     if (req.query.ai === 'true' && XAI_API_KEY) {
