@@ -1,5 +1,6 @@
 const express = require('express');
 const fetch = require('node-fetch');
+
 const app = express();
 app.use(express.json());
 
@@ -8,34 +9,34 @@ const XAI_API_KEY = process.env.XAI_API_KEY;
 
 let latestRaces = [];
 
-// ==================== STRICT EXPERT GROK AI PROMPT ====================
+// Strict Grok AI Prompt (max 1 horse per race, only if real edge)
 const SYSTEM_PROMPT = `You are an elite Australian horse racing analyst with 20+ years experience.
 Be extremely strict and conservative.
 
 Rules:
 - Return AT MOST ONE horse per race.
-- Only return a horse if you are GENUINELY confident it has a clear betting edge over the rest of the field.
-- If no horse meets your high standards, return an empty "selections" array.
+- Only return a horse if you are GENUINELY confident it has a clear betting edge.
+- If no horse meets your standards, return an empty "selections" array.
 
 For the selected horse include:
-- confidence: integer 0-100 (your true confidence level)
-- units: integer 1-10 (bet size based on confidence: 1-3 low, 4-6 medium, 7-10 high confidence)
-- reason: detailed natural-language expert explanation (form quality, class of previous races, track/condition match, barrier, weight, trainer/jockey patterns, distance suitability, etc.)
+- confidence: integer 0-100
+- units: integer 1-10 (bet size based on confidence)
+- reason: detailed expert explanation (form quality, class of previous races, track/condition match, barrier, weight, trainer/jockey, distance, etc.)
 
-Return ONLY valid JSON in this exact format:
+Return ONLY valid JSON:
 
 {
   "selections": [
     {
-      "horseName": "Exact horse name from the data",
+      "horseName": "Exact horse name",
       "confidence": 47,
       "units": 5,
-      "reason": "Dropped in class after a strong 2nd in a Group 3 on soft ground. Excellent barrier 3 draw today on Good 4, proven trainer in form, and looks perfectly suited to the 1200m trip."
+      "reason": "Strong recent win in higher class on similar ground. Excellent barrier today, trainer in form, perfectly suited to trip."
     }
   ]
 }`;
 
-// ==================== FORMFAV SCRAPE ====================
+// FormFav scrape
 async function scrapeFormFav() {
   try {
     const response = await fetch('https://api.formfav.com/races/today', {
@@ -47,14 +48,14 @@ async function scrapeFormFav() {
 
     if (!response.ok) throw new Error(`FormFav HTTP ${response.status}`);
     const data = await response.json();
-    return data.races || data;
+    return Array.isArray(data) ? data : (data.races || []);
   } catch (err) {
     console.error('FormFav scrape failed:', err.message);
     return [];
   }
 }
 
-// ==================== GROK AI ANALYSIS ====================
+// Grok AI analysis (only called on manual refresh)
 async function analyzeRaceWithGrok(race) {
   if (!XAI_API_KEY) return [];
 
@@ -79,29 +80,28 @@ async function analyzeRaceWithGrok(race) {
     const data = await aiResponse.json();
     const aiText = data.choices[0].message.content.trim();
     const aiResult = JSON.parse(aiText);
-
     return aiResult.selections || [];
   } catch (err) {
-    console.error(`Grok AI failed for ${race.track} R${race.raceNumber}:`, err.message);
+    console.error(`Grok AI failed for ${race.track || 'Unknown'} R${race.raceNumber || ''}:`, err.message);
     return [];
   }
 }
 
-// ==================== ENDPOINTS ====================
+// === ENDPOINTS ===
+
 app.post('/scrape-now', async (req, res) => {
   try {
     console.log('🔄 Manual scrape triggered');
 
     let races = await scrapeFormFav();
 
-    // Run Grok AI ONLY on manual refresh (?ai=true)
     if (req.query.ai === 'true' && XAI_API_KEY) {
       console.log('🚀 Running Grok AI expert analysis (max 1 horse per race)...');
       for (let race of races) {
         race.suggestions = await analyzeRaceWithGrok(race);
       }
     } else {
-      races.forEach(race => { race.suggestions = []; });
+      races.forEach(r => { r.suggestions = []; });
     }
 
     latestRaces = races;
@@ -113,7 +113,7 @@ app.post('/scrape-now', async (req, res) => {
       date: new Date().toISOString().split('T')[0]
     });
   } catch (err) {
-    console.error(err);
+    console.error('Scrape error:', err);
     res.status(500).json({ status: "error", message: err.message });
   }
 });
@@ -122,9 +122,9 @@ app.get('/today-races', (req, res) => {
   res.json(latestRaces);
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`✅ EquiEdge server running on port ${PORT}`);
-  console.log(`   • Normal scrape: fast & free`);
-  console.log(`   • Grok AI (max 1 horse per race + confidence + units + detailed reason): only on manual Refresh Scrape`);
+app.get('/', (req, res) => {
+  res.json({ status: "ok", message: "EquiEdge scraper is running" });
 });
+
+// IMPORTANT: Export the app for Vercel serverless
+module.exports = app;
