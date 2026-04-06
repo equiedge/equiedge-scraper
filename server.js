@@ -22,8 +22,7 @@ Rules:
 For the selected horse include:
 - confidence: integer 0-100
 - units: integer 1-10 (bet size based on confidence)
-- reason: detailed expert explanation (form quality, class of previous races, track/condition match, barrier, weight, trainer/jockey, distance, etc.)
-
+- reason: detailed expert explanation (form quality, class of previous races, sectional times, track/condition match, barrier, weight, trainer/jockey, distance, etc.)
 Return ONLY this JSON:
 {
   "selections": [
@@ -36,7 +35,7 @@ Return ONLY this JSON:
   ]
 }`;
 
-// ==================== LAST WORKING FORMFAV SCRAPE ====================
+// ==================== LAST WORKING FORMFAV SCRAPE (direct /races/today) ====================
 async function scrapeFormFav() {
   try {
     console.log('📡 [FormFav] Calling /races/today (last working endpoint)...');
@@ -103,7 +102,6 @@ app.all('/scrape-now', async (req, res) => {
     const races = await scrapeFormFav();
 
     if (req.query.ai === 'true' && XAI_API_KEY) {
-      console.log('🚀 Running Grok AI (max 1 horse per race)...');
       for (let race of races) {
         race.suggestions = await analyzeRaceWithGrok(race);
       }
@@ -119,13 +117,11 @@ app.all('/scrape-now', async (req, res) => {
       source: req.query.ai === 'true' ? "Grok AI + FormFav" : "FormFav"
     });
   } catch (err) {
-    console.error(err);
     res.status(500).json({ status: "error", message: err.message });
   }
 });
 
 app.get('/today-races', (req, res) => res.json(latestRaces));
-
 app.get('/', (req, res) => res.json({ status: "ok" }));
 
 module.exports = app;
