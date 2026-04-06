@@ -13,14 +13,17 @@ let latestRaces = [];
 // Strict Grok AI Prompt (max 1 horse per race, only if real edge)
 const SYSTEM_PROMPT = `You are an elite Australian horse racing analyst with 20+ years experience.
 Be extremely strict and conservative.
+
 Rules:
 - Return AT MOST ONE horse per race.
 - Only return a horse if you are GENUINELY confident it has a clear betting edge.
 - If no horse meets your standards, return an empty "selections" array.
+
 For the selected horse include:
 - confidence: integer 0-100
 - units: integer 1-10 (bet size based on confidence)
 - reason: detailed expert explanation (form quality, class of previous races, track/condition match, barrier, weight, trainer/jockey, distance, etc.)
+
 Return ONLY this JSON:
 {
   "selections": [
@@ -33,9 +36,11 @@ Return ONLY this JSON:
   ]
 }`;
 
-// ==================== LAST WORKING FORMFAV SCRAPE (direct /races/today) ====================
+// ==================== LAST WORKING FORMFAV SCRAPE ====================
 async function scrapeFormFav() {
   try {
+    console.log('📡 [FormFav] Calling /races/today (last working endpoint)...');
+
     const response = await fetch('https://api.formfav.com/races/today', {
       headers: {
         'Authorization': `Bearer ${FORMAV_API_KEY}`,
@@ -43,12 +48,20 @@ async function scrapeFormFav() {
       }
     });
 
-    if (!response.ok) throw new Error(`FormFav HTTP ${response.status}`);
+    console.log('FormFav HTTP status:', response.status);
+
+    if (!response.ok) {
+      console.error('❌ FormFav HTTP error:', response.status);
+      return [];
+    }
 
     const data = await response.json();
-    return Array.isArray(data) ? data : (data.races || []);
+    const races = Array.isArray(data) ? data : (data.races || []);
+
+    console.log('✅ FormFav successfully returned', races.length, 'races');
+    return races;
   } catch (err) {
-    console.error('FormFav scrape failed:', err.message);
+    console.error('❌ FormFav scrape failed:', err.message);
     return [];
   }
 }
@@ -90,6 +103,7 @@ app.all('/scrape-now', async (req, res) => {
     const races = await scrapeFormFav();
 
     if (req.query.ai === 'true' && XAI_API_KEY) {
+      console.log('🚀 Running Grok AI (max 1 horse per race)...');
       for (let race of races) {
         race.suggestions = await analyzeRaceWithGrok(race);
       }
@@ -105,11 +119,13 @@ app.all('/scrape-now', async (req, res) => {
       source: req.query.ai === 'true' ? "Grok AI + FormFav" : "FormFav"
     });
   } catch (err) {
+    console.error(err);
     res.status(500).json({ status: "error", message: err.message });
   }
 });
 
 app.get('/today-races', (req, res) => res.json(latestRaces));
+
 app.get('/', (req, res) => res.json({ status: "ok" }));
 
 module.exports = app;
