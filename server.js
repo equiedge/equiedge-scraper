@@ -13,17 +13,14 @@ let latestRaces = [];
 // Strict Grok AI Prompt (max 1 horse per race, only if real edge)
 const SYSTEM_PROMPT = `You are an elite Australian horse racing analyst with 20+ years experience.
 Be extremely strict and conservative.
-
 Rules:
 - Return AT MOST ONE horse per race.
 - Only return a horse if you are GENUINELY confident it has a clear betting edge.
 - If no horse meets your standards, return an empty "selections" array.
-
 For the selected horse include:
 - confidence: integer 0-100
 - units: integer 1-10 (bet size based on confidence)
 - reason: detailed expert explanation (form quality, class of previous races, track/condition match, barrier, weight, trainer/jockey, distance, etc.)
-
 Return ONLY this JSON:
 {
   "selections": [
@@ -36,45 +33,22 @@ Return ONLY this JSON:
   ]
 }`;
 
-// Two-step FormFav API
+// ==================== LAST WORKING FORMFAV SCRAPE (direct /races/today) ====================
 async function scrapeFormFav() {
-  const today = new Date().toISOString().split('T')[0];
-
   try {
-    const meetingsRes = await fetch(`https://api.formfav.com/v1/form/meetings?date=${today}&race_code=gallops`, {
+    const response = await fetch('https://api.formfav.com/races/today', {
       headers: {
-        'X-API-Key': FORMAV_API_KEY,
+        'Authorization': `Bearer ${FORMAV_API_KEY}`,
         'Accept': 'application/json'
       }
     });
 
-    if (!meetingsRes.ok) return [];
+    if (!response.ok) throw new Error(`FormFav HTTP ${response.status}`);
 
-    const meetingsData = await meetingsRes.json();
-    const meetings = meetingsData.meetings || [];
-
-    const races = [];
-
-    for (const meeting of meetings) {
-      if (meeting.abandoned) continue;
-      const slug = meeting.slug;
-
-      const formRes = await fetch(`https://api.formfav.com/v1/form?track=${slug}&date=${today}`, {
-        headers: {
-          'X-API-Key': FORMAV_API_KEY,
-          'Accept': 'application/json'
-        }
-      });
-
-      if (formRes.ok) {
-        const formData = await formRes.json();
-        if (formData.races) races.push(...formData.races);
-      }
-    }
-
-    return races;
+    const data = await response.json();
+    return Array.isArray(data) ? data : (data.races || []);
   } catch (err) {
-    console.error('FormFav error:', err.message);
+    console.error('FormFav scrape failed:', err.message);
     return [];
   }
 }
