@@ -10,24 +10,26 @@ const XAI_API_KEY = process.env.XAI_API_KEY;
 
 let latestRaces = [];
 
-// Major Australian tracks (this was the working logic)
+// Major Australian tracks (your last working version)
 const MAJOR_TRACKS = [
   "caulfield", "randwick", "flemington", "moonee-valley", "rosehill",
   "gold-coast", "doomben", "ascot", "eagle-farm", "wyong", "belmont",
   "canberra", "cranbourne", "warrnambool"
 ];
 
-// Grok AI Prompt - strict, max 1 horse per race
+// Strict Grok AI Prompt (max 1 horse per race, only if real edge)
 const SYSTEM_PROMPT = `You are an elite Australian horse racing analyst with 20+ years experience.
 Be extremely strict and conservative.
+
 Rules:
 - Return AT MOST ONE horse per race.
 - Only return a horse if you are GENUINELY confident it has a clear betting edge.
 - If no horse meets your standards, return an empty "selections" array.
+
 For the selected horse include:
 - confidence: integer 0-100
 - units: integer 1-10 (bet size based on confidence)
-- reason: detailed expert explanation (form quality, class of previous races, track/condition match, barrier, weight, trainer/jockey, distance, etc.)
+- reason: detailed expert explanation (form quality, class of previous races, sectional times, track/condition match, barrier, weight, trainer/jockey, distance, etc.)
 Return ONLY this JSON:
 {
   "selections": [
@@ -40,7 +42,7 @@ Return ONLY this JSON:
   ]
 }`;
 
-// ==================== OLD WORKING FORMFAV SCRAPE LOGIC ====================
+// ==================== YOUR LAST WORKING FORMFAV SCRAPE + FIXED DATE ====================
 async function fetchRace(date, track, raceNumber) {
   try {
     const url = `https://api.formfav.com/v1/form?date=${date}&track=${track}&race=${raceNumber}&race_code=gallops&country=au`;
@@ -55,18 +57,25 @@ async function fetchRace(date, track, raceNumber) {
 }
 
 async function scrapeFormFav() {
-  const date = new Date().toISOString().split('T')[0];
-  console.log(`🔄 Fetching real data from FormFav for ${date}`);
+  // Use Australia/Sydney timezone so we get today's races
+  const sydneyDate = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Australia/Sydney',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(new Date());
+
+  console.log(`🔄 Fetching real data from FormFav for Sydney date: ${sydneyDate}`);
 
   const allRaces = [];
 
   for (const track of MAJOR_TRACKS) {
     for (let raceNum = 1; raceNum <= 10; raceNum++) {
-      const data = await fetchRace(date, track, raceNum);
+      const data = await fetchRace(sydneyDate, track, raceNum);
       if (data && data.runners && data.runners.length > 0) {
         const race = {
           id: `${track}-R${raceNum}`,
-          date: new Date(date),
+          date: new Date(sydneyDate),
           track: track.toUpperCase().replace('-', ' '),
           raceNumber: raceNum,
           distance: data.distance || `${1400 + raceNum * 100}m`,
@@ -158,7 +167,6 @@ app.all('/scrape-now', async (req, res) => {
 });
 
 app.get('/today-races', (req, res) => res.json(latestRaces));
-
 app.get('/', (req, res) => res.json({ status: "ok" }));
 
 module.exports = app;
