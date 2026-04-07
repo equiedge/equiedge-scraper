@@ -1,3 +1,5 @@
+# 1. Force overwrite vercel.json with the correct content
+cat > vercel.json << 'EOF'
 {
   "version": 2,
   "builds": [
