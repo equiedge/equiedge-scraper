@@ -100,7 +100,7 @@ async function scrapeFormFav() {
   return allRaces;
 }
 
-// FIXED Grok AI with robust parsing
+// FIXED Grok AI with aggressive JSON extraction
 async function analyzeRaceWithGrok(race) {
   if (!XAI_API_KEY) return [];
   try {
@@ -123,19 +123,25 @@ async function analyzeRaceWithGrok(race) {
 
     const data = await aiResponse.json();
 
-    // Robust check
-    if (!data || !data.choices || !data.choices[0] || !data.choices[0].message || !data.choices[0].message.content) {
+    if (!data.choices || !data.choices[0] || !data.choices[0].message || !data.choices[0].message.content) {
       console.error('Grok AI returned invalid response structure');
       return [];
     }
 
     let aiText = data.choices[0].message.content.trim();
 
-    // Clean up if Grok adds extra text
+    // Aggressive cleanup for extra text/markdown
     if (aiText.includes('```json')) {
       aiText = aiText.split('```json')[1].split('```')[0].trim();
     } else if (aiText.includes('```')) {
       aiText = aiText.split('```')[1].trim();
+    }
+
+    // Remove any leading/trailing non-JSON text
+    const jsonStart = aiText.indexOf('{');
+    const jsonEnd = aiText.lastIndexOf('}');
+    if (jsonStart !== -1 && jsonEnd !== -1) {
+      aiText = aiText.substring(jsonStart, jsonEnd + 1);
     }
 
     const aiResult = JSON.parse(aiText);
