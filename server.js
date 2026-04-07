@@ -4,7 +4,7 @@ const fetch = require('node-fetch');
 const app = express();
 app.use(express.json());
 
-// Keys from Vercel Environment Variables
+// Keys come from Vercel Environment Variables
 const FORMAV_API_KEY = process.env.FORMAV_API_KEY;
 const XAI_API_KEY = process.env.XAI_API_KEY;
 
@@ -29,7 +29,6 @@ For the selected horse include:
 - confidence: integer 0-100
 - units: integer 1-10 (bet size based on confidence)
 - reason: detailed expert explanation (form quality, class of previous races, sectional times, track/condition match, barrier, weight, trainer/jockey, distance, etc.)
-
 Return ONLY this JSON:
 {
   "selections": [
@@ -42,7 +41,7 @@ Return ONLY this JSON:
   ]
 }`;
 
-// Your last working FormFav scrape
+// Working FormFav scrape
 async function fetchRace(date, track, raceNumber) {
   try {
     const url = `https://api.formfav.com/v1/form?date=${date}&track=${track}&race=${raceNumber}&race_code=gallops&country=au`;
@@ -101,7 +100,7 @@ async function scrapeFormFav() {
   return allRaces;
 }
 
-// FIXED Grok AI with safe response handling
+// FIXED Grok AI with robust parsing
 async function analyzeRaceWithGrok(race) {
   if (!XAI_API_KEY) return [];
   try {
@@ -124,13 +123,21 @@ async function analyzeRaceWithGrok(race) {
 
     const data = await aiResponse.json();
 
-    // Safe guard against bad response
-    if (!data.choices || !data.choices[0] || !data.choices[0].message || !data.choices[0].message.content) {
+    // Robust check
+    if (!data || !data.choices || !data.choices[0] || !data.choices[0].message || !data.choices[0].message.content) {
       console.error('Grok AI returned invalid response structure');
       return [];
     }
 
-    const aiText = data.choices[0].message.content.trim();
+    let aiText = data.choices[0].message.content.trim();
+
+    // Clean up if Grok adds extra text
+    if (aiText.includes('```json')) {
+      aiText = aiText.split('```json')[1].split('```')[0].trim();
+    } else if (aiText.includes('```')) {
+      aiText = aiText.split('```')[1].trim();
+    }
+
     const aiResult = JSON.parse(aiText);
     return aiResult.selections || [];
   } catch (err) {
