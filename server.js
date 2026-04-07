@@ -17,8 +17,8 @@ const SYSTEM_PROMPT = `You are an elite Australian horse racing analyst with 20+
 Be extremely strict and conservative.
 Rules:
 - Return AT MOST ONE horse per race.
-- Only return a horse if you are GENUINELY confident it has a clear betting edge (do not return anything unless you see real value).
-- If no horse meets your high standards, return an empty "selections" array.
+- Only return a horse if you are GENUINELY confident it has a clear betting edge.
+- If no horse meets your standards, return an empty "selections" array.
 
 For the selected horse include:
 - horseName: exact horse name from the data
@@ -60,7 +60,7 @@ async function fetchRace(date, track, raceNumber) {
 async function scrapeFormFav() {
   const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney' })
     .format(new Date())
-    .split('T')[0];   // YYYY-MM-DD in Sydney time
+    .split('T')[0];
 
   console.log(`🔄 Fetching real data from FormFav for Sydney date: ${date}`);
 
@@ -123,11 +123,9 @@ async function analyzeRaceWithGrok(race) {
       }
     });
 
-    console.log(`Grok API status for ${race.track} R${race.raceNumber}: ${aiResponse.status}`);
-
     let aiText = aiResponse.data.choices[0].message.content.trim();
 
-    // Aggressive cleaning for common LLM formatting
+    // Aggressive JSON cleaning
     if (aiText.includes('```json')) {
       aiText = aiText.split('```json')[1].split('```')[0].trim();
     } else if (aiText.includes('```')) {
@@ -146,20 +144,19 @@ async function analyzeRaceWithGrok(race) {
   } catch (err) {
     console.error(`❌ Grok AI failed for ${race.track} R${race.raceNumber}:`, err.message);
     if (err.response) {
-      console.error('Grok error response:', err.response.data);
+      console.error('Grok error details:', JSON.stringify(err.response.data, null, 2));
     }
     return [];
   }
 }
 
-// Endpoints
+// Routes
 app.all('/scrape-now', async (req, res) => {
   try {
-    console.log(`🔄 Scrape-now called (ai=${req.query.ai})`);
+    console.log(`🔄 Scrape-now called (ai=${req.query.ai || 'false'})`);
 
-    let races = await scrapeFormFav();
+    const races = await scrapeFormFav();
 
-    // Run Grok AI only if requested and key exists
     if (req.query.ai === 'true' && XAI_API_KEY) {
       console.log(`🚀 Running Grok AI (max 1 horse per race)...`);
       for (let race of races) {
@@ -188,7 +185,7 @@ app.get('/today-races', (req, res) => {
 });
 
 app.get('/', (req, res) => {
-  res.json({ status: "ok", message: "EquiEdge Scraper is running" });
+  res.json({ status: "ok", message: "EquiEdge Scraper running" });
 });
 
 module.exports = app;

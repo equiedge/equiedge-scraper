@@ -1,7 +1,7 @@
 {
   "name": "equiedge-scraper",
   "version": "1.0.0",
-  "description": "EquiEdge horse racing scraper with Grok AI analysis",
+  "description": "EquiEdge horse racing scraper with FormFav + Grok AI",
   "main": "server.js",
   "type": "commonjs",
   "scripts": {
@@ -9,8 +9,9 @@
     "dev": "node server.js"
   },
   "dependencies": {
-    "express": "^4.19.2",
-    "node-fetch": "^2.7.0"
+    "express": "^4.18.2",
+    "axios": "^1.6.0",
+    "cors": "^2.8.5"
   },
   "engines": {
     "node": ">=18"
