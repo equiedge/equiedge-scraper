@@ -10,17 +10,26 @@ const XAI_API_KEY = process.env.XAI_API_KEY;
 
 let latestRaces = [];
 
-// Grok AI Prompt
+// Major Australian tracks (your last working version)
+const MAJOR_TRACKS = [
+  "caulfield", "randwick", "flemington", "moonee-valley", "rosehill",
+  "gold-coast", "doomben", "ascot", "eagle-farm", "hamilton", "grafton",
+  "warrnambool"
+];
+// Strict Grok AI Prompt (max 1 horse per race, only if real edge)
 const SYSTEM_PROMPT = `You are an elite Australian horse racing analyst with 20+ years experience.
 Be extremely strict and conservative.
+
 Rules:
 - Return AT MOST ONE horse per race.
 - Only return a horse if you are GENUINELY confident it has a clear betting edge.
 - If no horse meets your standards, return an empty "selections" array.
+
 For the selected horse include:
 - confidence: integer 0-100
 - units: integer 1-10 (bet size based on confidence)
 - reason: detailed expert explanation (form quality, class of previous races, sectional times, track/condition match, barrier, weight, trainer/jockey, distance, etc.)
+
 Return ONLY this JSON:
 {
   "selections": [
