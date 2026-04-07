@@ -42,8 +42,7 @@ Return ONLY valid JSON in this format:
 // Major Australian tracks
 const MAJOR_TRACKS = [
   "caulfield", "randwick", "flemington", "moonee-valley", "rosehill",
-  "gold-coast", "doomben", "ascot", "eagle-farm", "wyong", "belmont",
-  "canberra", "cranbourne", "warrnambool", "grafton", "hamilton"
+  "gold-coast", "doomben", "ascot", "eagle-farm", "grafton", "hamilton"
 ];
 
 async function fetchRace(date, track, raceNumber) {
