@@ -4,28 +4,19 @@ const fetch = require('node-fetch');
 const app = express();
 app.use(express.json());
 
-// Keys come from Vercel Environment Variables
+// Keys from Vercel Environment Variables
 const FORMAV_API_KEY = process.env.FORMAV_API_KEY;
 const XAI_API_KEY = process.env.XAI_API_KEY;
 
 let latestRaces = [];
 
-// Major Australian tracks (your last working version)
-const MAJOR_TRACKS = [
-  "caulfield", "randwick", "flemington", "moonee-valley", "rosehill",
-  "gold-coast", "doomben", "ascot", "eagle-farm", "hamilton", "grafton",
-  "warrnambool"
-];
-
-// Strict Grok AI Prompt (max 1 horse per race, only if real edge)
+// Grok AI Prompt
 const SYSTEM_PROMPT = `You are an elite Australian horse racing analyst with 20+ years experience.
 Be extremely strict and conservative.
-
 Rules:
 - Return AT MOST ONE horse per race.
 - Only return a horse if you are GENUINELY confident it has a clear betting edge.
 - If no horse meets your standards, return an empty "selections" array.
-
 For the selected horse include:
 - confidence: integer 0-100
 - units: integer 1-10 (bet size based on confidence)
@@ -42,7 +33,7 @@ Return ONLY this JSON:
   ]
 }`;
 
-// ==================== YOUR LAST WORKING FORMFAV SCRAPE + FIXED DATE ====================
+// Your last working FormFav scrape
 async function fetchRace(date, track, raceNumber) {
   try {
     const url = `https://api.formfav.com/v1/form?date=${date}&track=${track}&race=${raceNumber}&race_code=gallops&country=au`;
@@ -57,25 +48,18 @@ async function fetchRace(date, track, raceNumber) {
 }
 
 async function scrapeFormFav() {
-  // Use Australia/Sydney timezone so we get today's races
-  const sydneyDate = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Australia/Sydney',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit'
-  }).format(new Date());
-
-  console.log(`🔄 Fetching real data from FormFav for Sydney date: ${sydneyDate}`);
+  const date = new Date().toISOString().split('T')[0];
+  console.log(`🔄 Fetching real data from FormFav for ${date}`);
 
   const allRaces = [];
 
   for (const track of MAJOR_TRACKS) {
     for (let raceNum = 1; raceNum <= 10; raceNum++) {
-      const data = await fetchRace(sydneyDate, track, raceNum);
+      const data = await fetchRace(date, track, raceNum);
       if (data && data.runners && data.runners.length > 0) {
         const race = {
           id: `${track}-R${raceNum}`,
-          date: new Date(sydneyDate),
+          date: new Date(date),
           track: track.toUpperCase().replace('-', ' '),
           raceNumber: raceNum,
           distance: data.distance || `${1400 + raceNum * 100}m`,
@@ -108,7 +92,7 @@ async function scrapeFormFav() {
   return allRaces;
 }
 
-// Grok AI
+// FIXED Grok AI with safe response handling
 async function analyzeRaceWithGrok(race) {
   if (!XAI_API_KEY) return [];
   try {
@@ -130,6 +114,13 @@ async function analyzeRaceWithGrok(race) {
     });
 
     const data = await aiResponse.json();
+
+    // Safe guard against bad response
+    if (!data.choices || !data.choices[0] || !data.choices[0].message || !data.choices[0].message.content) {
+      console.error('Grok AI returned invalid response structure');
+      return [];
+    }
+
     const aiText = data.choices[0].message.content.trim();
     const aiResult = JSON.parse(aiText);
     return aiResult.selections || [];
