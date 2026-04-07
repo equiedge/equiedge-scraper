@@ -1,4 +1,4 @@
-// vercel.json timeout updated - 2026-04-07
+// vercel.json timeout updated - 2026-04-07 2nd time
 // server.js - EquiEdge Scraper (FormFav + Grok AI) - Future-Proof Model
 const express = require('express');
 const axios = require('axios');
