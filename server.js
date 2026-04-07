@@ -1,21 +1,18 @@
+// server.js - EquiEdge Scraper (FormFav + Grok AI)
 const express = require('express');
-const fetch = require('node-fetch');
+const axios = require('axios');
+const cors = require('cors');
 
 const app = express();
+app.use(cors());
 app.use(express.json());
 
-// Keys come from Vercel Environment Variables
 const FORMAV_API_KEY = process.env.FORMAV_API_KEY;
 const XAI_API_KEY = process.env.XAI_API_KEY;
 
 let latestRaces = [];
 
-// Major Australian tracks (your last working version)
-const MAJOR_TRACKS = [
-  "caulfield", "randwick", "flemington", "moonee-valley", "rosehill",
-  "gold-coast", "doomben", "ascot", "eagle-farm", "hamilton", "grafton",
-  "warrnambool"
-];
+
 // Strict Grok AI Prompt (max 1 horse per race, only if real edge)
 const SYSTEM_PROMPT = `You are an elite Australian horse racing analyst with 20+ years experience.
 Be extremely strict and conservative.
@@ -29,35 +26,43 @@ For the selected horse include:
 - confidence: integer 0-100
 - units: integer 1-10 (bet size based on confidence)
 - reason: detailed expert explanation (form quality, class of previous races, sectional times, track/condition match, barrier, weight, trainer/jockey, distance, etc.)
-Return ONLY this JSON:
+Return ONLY valid JSON in this format:
 {
   "selections": [
     {
-      "horseName": "Exact horse name",
-      "confidence": 47,
-      "units": 5,
-      "reason": "Strong recent win in higher class on similar ground. Excellent barrier today, trainer in form, perfectly suited to trip."
+      "horseName": "Exact Horse Name",
+      "confidence": 68,
+      "units": 4,
+      "reason": "Strong recent win in a higher class race on similar track conditions. Excellent barrier draw today, trainer in peak form, perfectly suited to the distance."
     }
   ]
 }`;
 
-// Working FormFav scrape
+// Major Australian tracks
+const MAJOR_TRACKS = [
+  "caulfield", "randwick", "flemington", "moonee-valley", "rosehill",
+  "gold-coast", "doomben", "ascot", "eagle-farm", "wyong", "belmont",
+  "canberra", "cranbourne", "warrnambool", "grafton", "hamilton"
+];
+
 async function fetchRace(date, track, raceNumber) {
   try {
     const url = `https://api.formfav.com/v1/form?date=${date}&track=${track}&race=${raceNumber}&race_code=gallops&country=au`;
-    const response = await fetch(url, {
+    const { data } = await axios.get(url, {
       headers: { 'X-API-Key': FORMAV_API_KEY }
     });
-    if (!response.ok) return null;
-    return await response.json();
+    return data;
   } catch (err) {
     return null;
   }
 }
 
 async function scrapeFormFav() {
-  const date = new Date().toISOString().split('T')[0];
-  console.log(`🔄 Fetching real data from FormFav for ${date}`);
+  const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney' })
+    .format(new Date())
+    .split('T')[0];   // YYYY-MM-DD in Sydney time
+
+  console.log(`🔄 Fetching real data from FormFav for Sydney date: ${date}`);
 
   const allRaces = [];
 
@@ -70,24 +75,18 @@ async function scrapeFormFav() {
           date: new Date(date),
           track: track.toUpperCase().replace('-', ' '),
           raceNumber: raceNum,
-          distance: data.distance || `${1400 + raceNum * 100}m`,
+          distance: data.distance || "Unknown",
           condition: data.condition || "Good 4",
           weather: data.weather || "Fine",
           runners: data.runners.map(r => ({
-            number: r.number || 0,
-            name: r.name || "Unknown",
-            jockey: r.jockey || "Unknown",
-            trainer: r.trainer || "Unknown",
-            weight: parseFloat(r.weight) || 57.0,
-            barrier: parseInt(r.barrier) || 0,
-            form: r.form || "-----",
-            stats: {
-              winPct: r.winPct || 25,
-              trackWinPct: r.trackWinPct || 30,
-              distanceWinPct: r.distanceWinPct || 28,
-              goodTrackWinPct: r.goodTrackWinPct || 32,
-              recentFormScore: 0.65
-            }
+            number: r.number,
+            name: r.name,
+            jockey: r.jockey || "",
+            trainer: r.trainer || "",
+            weight: r.weight || 0,
+            barrier: r.barrier || 0,
+            form: r.form || "",
+            stats: r.stats || {}
           }))
         };
         allRaces.push(race);
@@ -100,44 +99,41 @@ async function scrapeFormFav() {
   return allRaces;
 }
 
-// FIXED Grok AI with aggressive JSON extraction
 async function analyzeRaceWithGrok(race) {
-  if (!XAI_API_KEY) return [];
+  if (!XAI_API_KEY) {
+    console.error('❌ No XAI_API_KEY configured');
+    return [];
+  }
+
   try {
-    const aiResponse = await fetch('https://api.x.ai/v1/chat/completions', {
-      method: 'POST',
+    console.log(`🚀 Analyzing ${race.track} R${race.raceNumber} with Grok AI...`);
+
+    const aiResponse = await axios.post('https://api.x.ai/v1/chat/completions', {
+      model: "grok-beta",
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: `Analyze this race and return at most one elite selection only if there is a genuine edge:\n${JSON.stringify(race, null, 2)}` }
+      ],
+      temperature: 0.3,
+      max_tokens: 800
+    }, {
       headers: {
         'Authorization': `Bearer ${XAI_API_KEY}`,
         'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: "grok-beta",
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: `Analyze this race and return at most one elite selection only if there is a genuine edge:\n${JSON.stringify(race, null, 2)}` }
-        ],
-        temperature: 0.3,
-        max_tokens: 800
-      })
+      }
     });
 
-    const data = await aiResponse.json();
+    console.log(`Grok API status for ${race.track} R${race.raceNumber}: ${aiResponse.status}`);
 
-    if (!data.choices || !data.choices[0] || !data.choices[0].message || !data.choices[0].message.content) {
-      console.error('Grok AI returned invalid response structure');
-      return [];
-    }
+    let aiText = aiResponse.data.choices[0].message.content.trim();
 
-    let aiText = data.choices[0].message.content.trim();
-
-    // Aggressive cleanup for extra text/markdown
+    // Aggressive cleaning for common LLM formatting
     if (aiText.includes('```json')) {
       aiText = aiText.split('```json')[1].split('```')[0].trim();
     } else if (aiText.includes('```')) {
       aiText = aiText.split('```')[1].trim();
     }
 
-    // Remove any leading/trailing non-JSON text
     const jsonStart = aiText.indexOf('{');
     const jsonEnd = aiText.lastIndexOf('}');
     if (jsonStart !== -1 && jsonEnd !== -1) {
@@ -145,9 +141,13 @@ async function analyzeRaceWithGrok(race) {
     }
 
     const aiResult = JSON.parse(aiText);
+    console.log(`✅ Grok AI success for ${race.track} R${race.raceNumber}`);
     return aiResult.selections || [];
   } catch (err) {
-    console.error('Grok AI failed:', err.message);
+    console.error(`❌ Grok AI failed for ${race.track} R${race.raceNumber}:`, err.message);
+    if (err.response) {
+      console.error('Grok error response:', err.response.data);
+    }
     return [];
   }
 }
@@ -155,10 +155,13 @@ async function analyzeRaceWithGrok(race) {
 // Endpoints
 app.all('/scrape-now', async (req, res) => {
   try {
-    const races = await scrapeFormFav();
+    console.log(`🔄 Scrape-now called (ai=${req.query.ai})`);
 
+    let races = await scrapeFormFav();
+
+    // Run Grok AI only if requested and key exists
     if (req.query.ai === 'true' && XAI_API_KEY) {
-      console.log('🚀 Running Grok AI (max 1 horse per race)...');
+      console.log(`🚀 Running Grok AI (max 1 horse per race)...`);
       for (let race of races) {
         race.suggestions = await analyzeRaceWithGrok(race);
       }
@@ -171,15 +174,21 @@ app.all('/scrape-now', async (req, res) => {
     res.json({
       status: "ok",
       races: races.length,
+      date: new Date().toISOString().split('T')[0],
       source: req.query.ai === 'true' ? "Grok AI + FormFav" : "FormFav"
     });
   } catch (err) {
-    console.error(err);
+    console.error('❌ Scrape error:', err.message);
     res.status(500).json({ status: "error", message: err.message });
   }
 });
 
-app.get('/today-races', (req, res) => res.json(latestRaces));
-app.get('/', (req, res) => res.json({ status: "ok" }));
+app.get('/today-races', (req, res) => {
+  res.json(latestRaces);
+});
+
+app.get('/', (req, res) => {
+  res.json({ status: "ok", message: "EquiEdge Scraper is running" });
+});
 
 module.exports = app;
