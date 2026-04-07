@@ -13,8 +13,8 @@ let latestRaces = [];
 // Major Australian tracks (your last working version)
 const MAJOR_TRACKS = [
   "caulfield", "randwick", "flemington", "moonee-valley", "rosehill",
-  "gold-coast", "doomben", "ascot", "eagle-farm", "wyong", "belmont",
-  "canberra", "cranbourne", "warrnambool"
+  "gold-coast", "doomben", "ascot", "eagle-farm", "hamilton", "grafton",
+  "warrnambool"
 ];
 
 // Strict Grok AI Prompt (max 1 horse per race, only if real edge)
