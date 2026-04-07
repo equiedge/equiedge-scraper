@@ -1,4 +1,4 @@
-// server.js - EquiEdge Scraper (FormFav + Grok AI)
+// server.js - EquiEdge Scraper (FormFav + Grok AI) - Future-Proof Model
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
@@ -109,7 +109,7 @@ async function analyzeRaceWithGrok(race) {
     console.log(`🚀 Analyzing ${race.track} R${race.raceNumber} with Grok AI...`);
 
     const aiResponse = await axios.post('https://api.x.ai/v1/chat/completions', {
-      model: "grok-beta",
+      model: "grok-4.20-reasoning",   // ← Current flagship model (most reliable)
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: `Analyze this race and return at most one elite selection only if there is a genuine edge:\n${JSON.stringify(race, null, 2)}` }
