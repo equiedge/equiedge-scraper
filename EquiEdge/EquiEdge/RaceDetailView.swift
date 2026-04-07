@@ -1,122 +1,101 @@
 import SwiftUI
 import SwiftData
 
-public struct RaceDetailView: View {
-    
+struct RaceDetailView: View {
     let race: Race
-    let suggestions: [BetSuggestion]
-    
-    public init(race: Race, suggestions: [BetSuggestion]) {
-        self.race = race
-        self.suggestions = suggestions
-    }
-    
-    @Environment(\.modelContext) private var modelContext
     @AppStorage("unitSize") private var unitSize: Double = 10.0
+    @Environment(\.modelContext) private var modelContext
+    @State private var selectedSuggestion: BetSuggestion?
     
-    public var body: some View {
+    var body: some View {
         ScrollView {
-            VStack(spacing: 20) {
-                // Race Header
-                VStack(spacing: 8) {
-                    Text("\(race.track)")
-                        .font(.largeTitle.bold())
-                    Text("Race \(race.raceNumber) • \(race.distance)")
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
-                    
-                    Text("\(race.condition) • \(race.weather)")
-                        .font(.headline)
-                        .foregroundStyle(.green)
-                }
-                .padding(.top)
-                
-                // Suggestions
-                if suggestions.isEmpty {
-                    VStack(spacing: 12) {
-                        Image(systemName: "flag.slash")
-                            .font(.system(size: 50))
-                            .foregroundStyle(.secondary)
-                        Text("No high-confidence bets")
-                            .font(.title2.bold())
-                        Text("EquiEdge only suggests when it is very confident.\nTry another race.")
-                            .multilineTextAlignment(.center)
-                            .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 20) {
+                // Race info
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text(race.condition)
+                        Text("• \(race.distance)")
+                        Spacer()
                     }
-                    .padding(.top, 60)
+                    .foregroundStyle(.secondary)
+                    .font(.headline)
+                }
+                .padding(.horizontal)
+                
+                if race.suggestions.isEmpty {
+                    ContentUnavailableView("No High-Confidence Picks", systemImage: "flag.fill")
                 } else {
-                    ForEach(suggestions) { suggestion in
-                        VStack(alignment: .leading, spacing: 14) {
-                            HStack {
-                                Text("\(suggestion.horse.number). \(suggestion.horse.name)")
-                                    .font(.title2.bold())
-                                Spacer()
-                                Text("\(Int(suggestion.predictedProb * 100))%")
-                                    .font(.largeTitle.bold())
-                                    .foregroundStyle(.green)
-                            }
-                            
-                            Text(suggestion.reason)
-                                .font(.body)
-                                .foregroundStyle(.secondary)
-                                .padding(.vertical, 4)
-                            
-                            HStack {
-                                Text("Bet \(suggestion.units) units")
-                                    .font(.headline)
-                                Spacer()
-                                Text("\(Double(suggestion.units) * unitSize, specifier: "$%.0f")")
-                                    .font(.headline)
-                                    .foregroundStyle(.green)
-                            }
-                            
-                            Button {
-                                logBet(suggestion: suggestion)
-                            } label: {
-                                Text("Log This Bet")
-                                    .frame(maxWidth: .infinity)
-                                    .padding()
-                                    .background(Color.green)
-                                    .foregroundStyle(.black)
-                                    .font(.headline)
-                                    .cornerRadius(12)
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("High-Confidence Selections")
+                            .font(.headline)
+                            .padding(.horizontal)
+                        
+                        ForEach(race.suggestions) { suggestion in
+                            SuggestionCard(suggestion: suggestion, unitSize: unitSize) {
+                                let bet = BetRecord(
+                                    raceInfo: suggestion.raceInfo,
+                                    horseName: suggestion.horseName,
+                                    units: suggestion.units,
+                                    amount: Double(suggestion.units) * unitSize,
+                                    confidence: suggestion.confidence,
+                                    reason: suggestion.reason
+                                )
+                                modelContext.insert(bet)
+                                selectedSuggestion = suggestion
                             }
                         }
-                        .padding()
-                        .background(RoundedRectangle(cornerRadius: 16).fill(Color(.systemGray6)))
                     }
                 }
             }
-            .padding()
         }
-        .navigationTitle("Race Analysis")
+        .navigationTitle("\(race.track) R\(race.raceNumber)")
         .navigationBarTitleDisplayMode(.inline)
-    }
-    
-    private func logBet(suggestion: BetSuggestion) {
-        let record = BetRecord(
-            raceDate: race.date,
-            track: race.track,
-            raceNumber: race.raceNumber,
-            horseName: suggestion.horse.name,
-            predictedProb: suggestion.predictedProb,
-            unitsBet: suggestion.units,
-            unitSize: unitSize
-        )
-        modelContext.insert(record)
-        
-        // Simple success feedback
-        print("✅ Bet logged: \(suggestion.horse.name) - \(suggestion.units) units")
+        .alert("Bet Logged!", isPresented: .constant(selectedSuggestion != nil)) {
+            Button("OK") { selectedSuggestion = nil }
+        } message: {
+            if let suggestion = selectedSuggestion {
+                Text("\(suggestion.horseName) – \(suggestion.units) units logged")
+            }
+        }
     }
 }
-#if DEBUG
-private struct _PreviewRaceDetailView_Previews: PreviewProvider {
-    static var previews: some View {
-        let sampleHorse = Horse(number: 1, name: "Sample Horse", jockey: "J. Doe", trainer: "T. Smith", weight: 58.0, barrier: 4, form: "3-1-2", stats: HorseStats(winPct: 35, trackWinPct: 30, distanceWinPct: 28, goodTrackWinPct: 32, recentFormScore: 0.7))
-        let sampleSuggestion = BetSuggestion(horse: sampleHorse, predictedProb: 0.42, units: 3, reason: "Strong late speed and favorable post position.", raceInfo: "Belmont Park R5 • 6f")
-        let sampleRace = Race(date: .now, track: "Belmont Park", raceNumber: 5, distance: "6f", condition: "Fast", weather: "Sunny", runners: [sampleHorse])
-        return NavigationStack { RaceDetailView(race: sampleRace, suggestions: [sampleSuggestion]) }
-    }
-}
-#endif
 
+struct SuggestionCard: View {
+    let suggestion: BetSuggestion
+    let unitSize: Double
+    let onLogBet: () -> Void
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(suggestion.horseName)
+                    .font(.title3.bold())
+                Spacer()
+                Text("\(suggestion.confidence)%")
+                    .font(.title.bold())
+                    .foregroundStyle(.green)
+            }
+            
+            Text(suggestion.reason)
+                .font(.body)
+                .foregroundStyle(.secondary)
+            
+            HStack {
+                Text("\(suggestion.units) units • $\(Int(Double(suggestion.units) * unitSize))")
+                    .font(.headline)
+                Spacer()
+                Button("Log Bet", action: onLogBet)
+                    .font(.headline)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 8)
+                    .background(Color.green)
+                    .foregroundStyle(.white)
+                    .clipShape(Capsule())
+            }
+        }
+        .padding()
+        .background(Color(.secondarySystemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .padding(.horizontal)
+    }
+}
