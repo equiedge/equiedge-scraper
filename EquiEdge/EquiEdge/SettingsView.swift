@@ -3,10 +3,12 @@ import SwiftUI
 struct SettingsView: View {
     @AppStorage("unitSize") private var unitSize: Double = 10.0
     @AppStorage("confidenceThreshold") private var confidenceThreshold: Double = 0.41
-    @AppStorage("useGrokAI") private var useGrokAI: Bool = true   // ← Added this
+    @AppStorage("useAI") private var useAI: Bool = true
+    @StateObject private var dataService = DataService.shared
     
     @State private var isRefreshing = false
     @State private var refreshMessage: String = ""
+    @State private var showRefreshConfirmation = false
     
     var body: some View {
         NavigationStack {
@@ -15,7 +17,7 @@ struct SettingsView: View {
                     VStack(alignment: .leading) {
                         Text("Unit Amount ($)")
                             .font(.headline)
-                        Slider(value: $unitSize, in: 5...50, step: 1)
+                        Slider(value: $unitSize, in: 5...50, step: 5)
                         Text("$\(Int(unitSize)) per unit")
                             .font(.title3.bold())
                             .foregroundStyle(.green)
@@ -24,22 +26,10 @@ struct SettingsView: View {
                 
                 
                 Section("Data Source") {
-                    Toggle("Use Grok AI Analysis (recommended)", isOn: $useGrokAI)
+                    Toggle("Use AI Analysis (recommended)", isOn: $useAI)
                     
                     Button {
-                        Task {
-                            isRefreshing = true
-                            refreshMessage = "Triggering scrape..."
-                            
-                            do {
-                                try await DataService.shared.refreshScrape()
-                                refreshMessage = "✅ Scrape refreshed successfully"
-                            } catch {
-                                refreshMessage = "❌ Refresh failed: \(error.localizedDescription)"
-                            }
-                            
-                            isRefreshing = false
-                        }
+                        showRefreshConfirmation = true
                     } label: {
                         HStack {
                             if isRefreshing {
@@ -56,7 +46,46 @@ struct SettingsView: View {
                     if !refreshMessage.isEmpty {
                         Text(refreshMessage)
                             .font(.caption)
-                            .foregroundStyle(refreshMessage.contains("✅") ? .green : .red)
+                            .foregroundStyle(refreshMessage.contains("OK") ? .green : .red)
+                    }
+                    
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("App Logs")
+                                .font(.headline)
+                            Spacer()
+                            Button("Clear") {
+                                dataService.clearLogs()
+                            }
+                            .font(.caption)
+                        }
+                        .padding(.top, 4)
+
+                        if dataService.logs.isEmpty {
+                            Text("No logs yet")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ScrollViewReader { proxy in
+                                ScrollView {
+                                    LazyVStack(alignment: .leading, spacing: 6) {
+                                        ForEach(Array(dataService.logs.suffix(150).enumerated()), id: \.offset) { index, line in
+                                            Text(line)
+                                                .font(.caption2)
+                                                .textSelection(.enabled)
+                                                .monospaced()
+                                                .id(index)
+                                        }
+                                    }
+                                }
+                                .frame(minHeight: 120, maxHeight: 240)
+                                .onChange(of: dataService.logs.count) {
+                                    if let last = dataService.logs.suffix(150).indices.last {
+                                        proxy.scrollTo(last - dataService.logs.suffix(150).startIndex, anchor: .bottom)
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 
@@ -67,6 +96,34 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
+            .confirmationDialog(
+                "Refresh Race Data",
+                isPresented: $showRefreshConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Refresh Now") {
+                    performRefresh()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This will trigger a new scrape from the server. Existing data for today will be replaced.")
+            }
+        }
+    }
+    
+    private func performRefresh() {
+        Task {
+            isRefreshing = true
+            refreshMessage = ""
+            
+            do {
+                try await dataService.refreshScrape()
+                refreshMessage = "OK — Scrape refreshed successfully"
+            } catch {
+                refreshMessage = "Failed: \(error.localizedDescription)"
+            }
+            
+            isRefreshing = false
         }
     }
 }

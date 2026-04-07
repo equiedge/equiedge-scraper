@@ -42,7 +42,7 @@ Return ONLY valid JSON in this format:
 // Major Australian tracks
 const MAJOR_TRACKS = [
   "caulfield", "randwick", "flemington", "moonee-valley", "rosehill",
-  "gold-coast", "doomben", "ascot", "eagle-farm", "grafton"
+  "gold-coast", "doomben", "ascot", "eagle-farm"
 ];
 
 async function fetchRace(date, track, raceNumber) {
@@ -109,7 +109,7 @@ async function analyzeRaceWithGrok(race) {
     console.log(`🚀 Analyzing ${race.track} R${race.raceNumber} with Grok AI...`);
 
     const aiResponse = await axios.post('https://api.x.ai/v1/chat/completions', {
-      model: "grok-4.20-reasoning",   // ← Current flagship model (most reliable)
+      model: "grok-4-1-fast-reasoning",   // ← Grok 4.1 Fast (10x cheaper, still top-tier)
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: `Analyze this race and return at most one elite selection only if there is a genuine edge:\n${JSON.stringify(race, null, 2)}` }
