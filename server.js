@@ -1,5 +1,4 @@
-// vercel.json timeout updated - 2026-04-07 3rd time
-// server.js - EquiEdge Scraper (FormFav + Grok AI) - Grok 4.1 Fast
+// server.js - EquiEdge Scraper (FormFav + Grok AI) - Grok 4.1 Fast + Live Logs
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
@@ -12,8 +11,17 @@ const FORMAV_API_KEY = process.env.FORMAV_API_KEY;
 const XAI_API_KEY = process.env.XAI_API_KEY;
 
 let latestRaces = [];
+let serverLogs = [];
 
-// Strict Grok AI Prompt (max 1 horse per race, only if real edge, always return analysis)
+function serverLog(msg) {
+  const ts = new Date().toISOString().replace('T', ' ').substring(0, 23);
+  const line = `${ts} [info] ${msg}`;
+  serverLogs.push(line);
+  console.log(line);
+  if (serverLogs.length > 500) serverLogs.splice(0, serverLogs.length - 500);
+}
+
+// Strict Grok AI Prompt (max 1 horse per race, always return analysis)
 const SYSTEM_PROMPT = `You are an elite Australian horse racing analyst with 20+ years experience.
 Be extremely strict and conservative.
 
@@ -64,7 +72,7 @@ async function scrapeFormFav() {
     .format(new Date())
     .split('T')[0];
 
-  console.log(`🔄 Fetching real data from FormFav for Sydney date: ${date}`);
+  serverLog(`🔄 Fetching real data from FormFav for Sydney date: ${date}`);
 
   const allRaces = [];
 
@@ -92,26 +100,26 @@ async function scrapeFormFav() {
           }))
         };
         allRaces.push(race);
-        console.log(`✅ Loaded ${track} R${raceNum} (${race.runners.length} runners)`);
+        serverLog(`✅ Loaded ${track} R${raceNum} (${race.runners.length} runners)`);
       }
     }
   }
 
-  console.log(`✅ FormFav loaded ${allRaces.length} real races`);
+  serverLog(`✅ FormFav loaded ${allRaces.length} real races`);
   return allRaces;
 }
 
 async function analyzeRaceWithGrok(race) {
   if (!XAI_API_KEY) {
-    console.error('❌ No XAI_API_KEY configured');
+    serverLog('❌ No XAI_API_KEY configured');
     return { selections: [], analysis: "" };
   }
 
   try {
-    console.log(`🚀 Analyzing ${race.track} R${race.raceNumber} with Grok AI...`);
+    serverLog(`🚀 Analyzing ${race.track} R${race.raceNumber} with Grok AI...`);
 
     const aiResponse = await axios.post('https://api.x.ai/v1/chat/completions', {
-      model: "grok-4-1-fast-reasoning",   // ← Grok 4.1 Fast (10x cheaper, still top-tier)
+      model: "grok-4-1-fast-reasoning",
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: `Analyze this race and return at most one elite selection only if there is a genuine edge:\n${JSON.stringify(race, null, 2)}` }
@@ -141,15 +149,20 @@ async function analyzeRaceWithGrok(race) {
     }
 
     const aiResult = JSON.parse(aiText);
-    console.log(`✅ Grok AI success for ${race.track} R${race.raceNumber}`);
+    const picks = aiResult.selections || [];
+    if (picks.length > 0) {
+      serverLog(`✅ Grok AI pick for ${race.track} R${race.raceNumber}: ${picks[0].horseName} (${picks[0].confidence}%)`);
+    } else {
+      serverLog(`⏭️ Grok AI: no confident pick for ${race.track} R${race.raceNumber}`);
+    }
     return {
-      selections: aiResult.selections || [],
+      selections: picks,
       analysis: aiResult.analysis || ""
     };
   } catch (err) {
-    console.error(`❌ Grok AI failed for ${race.track} R${race.raceNumber}:`, err.message);
+    serverLog(`❌ Grok AI failed for ${race.track} R${race.raceNumber}: ${err.message}`);
     if (err.response) {
-      console.error('Grok error details:', JSON.stringify(err.response.data, null, 2));
+      serverLog(`   Error details: ${JSON.stringify(err.response.data)}`);
     }
     return { selections: [], analysis: "" };
   }
@@ -158,17 +171,20 @@ async function analyzeRaceWithGrok(race) {
 // Routes
 app.all('/scrape-now', async (req, res) => {
   try {
-    console.log(`🔄 Scrape-now called (ai=${req.query.ai || 'false'})`);
+    serverLogs = [];
+    serverLog(`🔄 Scrape-now called (ai=${req.query.ai || 'false'})`);
 
     const races = await scrapeFormFav();
 
     if (req.query.ai === 'true' && XAI_API_KEY) {
-      console.log(`🚀 Running Grok AI (max 1 horse per race)...`);
+      serverLog(`🚀 Running Grok AI analysis on ${races.length} races...`);
       for (let race of races) {
         const result = await analyzeRaceWithGrok(race);
         race.suggestions = result.selections;
         race.aiAnalysis = result.analysis;
       }
+      const picksCount = races.filter(r => r.suggestions.length > 0).length;
+      serverLog(`✅ Grok AI complete — ${picksCount} picks from ${races.length} races`);
     } else {
       races.forEach(r => { r.suggestions = []; r.aiAnalysis = ""; });
     }
@@ -182,9 +198,13 @@ app.all('/scrape-now', async (req, res) => {
       source: req.query.ai === 'true' ? "Grok AI + FormFav" : "FormFav"
     });
   } catch (err) {
-    console.error('❌ Scrape error:', err.message);
+    serverLog(`❌ Scrape error: ${err.message}`);
     res.status(500).json({ status: "error", message: err.message });
   }
+});
+
+app.get('/logs', (req, res) => {
+  res.json(serverLogs);
 });
 
 app.get('/today-races', (req, res) => {
