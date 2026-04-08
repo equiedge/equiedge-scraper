@@ -67,16 +67,16 @@ async function fetchRace(date, track, raceNumber) {
   }
 }
 
-async function scrapeFormFav() {
+async function scrapeFormFav(tracks) {
   const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney' })
     .format(new Date())
     .split('T')[0];
 
-  serverLog(`🔄 Fetching real data from FormFav for Sydney date: ${date}`);
+  serverLog(`🔄 Fetching real data from FormFav for Sydney date: ${date} (${tracks.length} tracks)`);
 
   const allRaces = [];
 
-  for (const track of MAJOR_TRACKS) {
+  for (const track of tracks) {
     for (let raceNum = 1; raceNum <= 10; raceNum++) {
       const data = await fetchRace(date, track, raceNum);
       if (data && data.runners && data.runners.length > 0) {
@@ -172,9 +172,17 @@ async function analyzeRaceWithGrok(race) {
 app.all('/scrape-now', async (req, res) => {
   try {
     serverLogs = [];
-    serverLog(`🔄 Scrape-now called (ai=${req.query.ai || 'false'})`);
 
-    const races = await scrapeFormFav();
+    const tracksParam = req.query.tracks;
+    if (!tracksParam || tracksParam.trim() === '') {
+      serverLog('❌ No racetracks have been selected to analyse');
+      return res.status(400).json({ error: "No racetracks have been selected to analyse" });
+    }
+
+    const tracks = tracksParam.split(',').map(t => t.trim()).filter(Boolean);
+    serverLog(`🔄 Scrape-now called (ai=${req.query.ai || 'false'}, tracks: ${tracks.join(', ')})`);
+
+    const races = await scrapeFormFav(tracks);
 
     if (req.query.ai === 'true' && XAI_API_KEY) {
       serverLog(`🚀 Running Grok AI analysis on ${races.length} races...`);
