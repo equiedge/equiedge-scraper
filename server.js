@@ -170,20 +170,48 @@ async function analyzeRaceWithGrok(race) {
 
 // TAB Odds Fetching
 async function fetchTABMeetings(date) {
-  try {
-    serverLog('💰 Fetching TAB meetings for odds lookup...');
-    const url = `https://api.beta.tab.com.au/v1/tab-info-service/racing/dates/${date}/meetings?jurisdiction=NSW`;
-    const { data } = await axios.get(url, {
-      headers: { 'Accept': 'application/json' },
-      timeout: 15000
-    });
-    const meetings = data.meetings || [];
-    serverLog(`💰 TAB returned ${meetings.length} meetings`);
-    return meetings;
-  } catch (err) {
-    serverLog(`⚠️ TAB meetings fetch failed: ${err.message}`);
-    return [];
+  // Try multiple TAB API endpoints
+  const urls = [
+    `https://api.beta.tab.com.au/v1/tab-info-service/racing/dates/${date}/meetings?jurisdiction=NSW`,
+    `https://api.beta.tab.com.au/v1/tab-info-service/racing/dates/${date}/meetings`,
+    `https://api.beta.tab.com.au/v1/historical-results-service/NSW/racing/${date}`,
+  ];
+
+  for (const url of urls) {
+    try {
+      serverLog(`💰 Trying TAB: ${url}`);
+      const { data } = await axios.get(url, {
+        headers: {
+          'Accept': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Referer': 'https://www.tab.com.au/',
+          'Origin': 'https://www.tab.com.au'
+        },
+        timeout: 15000
+      });
+
+      // Debug: log what we actually got back
+      const topKeys = typeof data === 'object' ? Object.keys(data).join(', ') : typeof data;
+      serverLog(`💰 TAB response keys: ${topKeys}`);
+
+      // Try different response shapes
+      const meetings = data.meetings || data.races || data.results || [];
+      if (Array.isArray(meetings) && meetings.length > 0) {
+        serverLog(`💰 TAB returned ${meetings.length} meetings from ${url}`);
+        return meetings;
+      }
+      // If data itself is an array of meetings
+      if (Array.isArray(data) && data.length > 0) {
+        serverLog(`💰 TAB returned ${data.length} meetings (array) from ${url}`);
+        return data;
+      }
+    } catch (err) {
+      serverLog(`⚠️ TAB endpoint failed: ${err.message}`);
+    }
   }
+
+  serverLog('⚠️ All TAB endpoints failed — skipping odds lookup');
+  return [];
 }
 
 async function fetchTABRaceOdds(raceUrl) {
