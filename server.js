@@ -27,14 +27,14 @@ Be extremely strict and conservative.
 
 Rules:
 - Return AT MOST ONE horse per race.
-- Only return a horse if you are GENUINELY confident it has a clear betting edge.
+- Only return a horse if you are GENUINELY confident it will WIN and has a clear betting edge.
 - If no horse meets your standards, return an empty "selections" array.
 - ALWAYS provide an "analysis" field with your full reasoning about the race, regardless of whether you make a selection.
 
 For the selected horse include:
 - confidence: integer 0-100
 - units: integer 1-10 (bet size based on confidence)
-- reason: detailed expert explanation (form quality, class of previous races, sectional times, track/condition match, barrier, weight, trainer/jockey, distance, etc.)
+- reason: detailed expert explanation (form quality, class of previous races, sectional times, track/condition match, barrier, weight, trainer/jockey, distance etc.)
 
 Return ONLY valid JSON in this format:
 {
@@ -168,6 +168,110 @@ async function analyzeRaceWithGrok(race) {
   }
 }
 
+// TAB Odds Fetching
+async function fetchTABMeetings(date) {
+  try {
+    serverLog('💰 Fetching TAB meetings for odds lookup...');
+    const url = `https://api.beta.tab.com.au/v1/tab-info-service/racing/dates/${date}/meetings?jurisdiction=NSW`;
+    const { data } = await axios.get(url, {
+      headers: { 'Accept': 'application/json' },
+      timeout: 15000
+    });
+    const meetings = data.meetings || [];
+    serverLog(`💰 TAB returned ${meetings.length} meetings`);
+    return meetings;
+  } catch (err) {
+    serverLog(`⚠️ TAB meetings fetch failed: ${err.message}`);
+    return [];
+  }
+}
+
+async function fetchTABRaceOdds(raceUrl) {
+  try {
+    const { data } = await axios.get(raceUrl, {
+      headers: { 'Accept': 'application/json' },
+      timeout: 10000
+    });
+    return data;
+  } catch (err) {
+    return null;
+  }
+}
+
+function slugToName(slug) {
+  return slug.replace(/-/g, ' ').toLowerCase();
+}
+
+async function lookupFixedWinOdds(tabMeetings, trackSlug, raceNumber, horseName) {
+  const trackName = slugToName(trackSlug);
+
+  // Find matching meeting by venue name
+  const meeting = tabMeetings.find(m => {
+    const venue = (m.meetingName || m.venueMnemonic || '').toLowerCase();
+    return venue.includes(trackName) || trackName.includes(venue);
+  });
+
+  if (!meeting) return null;
+
+  // Find the race by number
+  const races = meeting.races || [];
+  const race = races.find(r => r.raceNumber === raceNumber);
+  if (!race) return null;
+
+  // If race has a link for full details (with odds), fetch it
+  let runners = race.runners || race.entries || [];
+  if (runners.length === 0 && race._links && race._links.self) {
+    const raceDetail = await fetchTABRaceOdds(race._links.self);
+    if (raceDetail) {
+      runners = raceDetail.runners || raceDetail.entries || [];
+    }
+  }
+
+  // Find the runner by horse name (case-insensitive)
+  const target = horseName.toLowerCase().trim();
+  const runner = runners.find(r => {
+    const name = (r.runnerName || r.name || '').toLowerCase().trim();
+    return name === target;
+  });
+
+  if (!runner) return null;
+
+  // Extract fixed win odds
+  const fixedOdds = runner.fixedOdds || runner.fixedWin || {};
+  const odds = fixedOdds.returnWin || fixedOdds.win || fixedOdds.winOdds || null;
+
+  if (odds && odds > 0) {
+    return odds;
+  }
+  return null;
+}
+
+async function attachTABOdds(races, date) {
+  const tabMeetings = await fetchTABMeetings(date);
+  if (tabMeetings.length === 0) {
+    serverLog('⚠️ No TAB meetings available — skipping odds lookup');
+    return;
+  }
+
+  let oddsFound = 0;
+  for (const race of races) {
+    if (!race.suggestions || race.suggestions.length === 0) continue;
+
+    // Extract the original track slug from the race id (e.g. "caulfield-R1" → "caulfield")
+    const trackSlug = race.id.replace(/-R\d+$/, '');
+
+    for (const suggestion of race.suggestions) {
+      const odds = await lookupFixedWinOdds(tabMeetings, trackSlug, race.raceNumber, suggestion.horseName);
+      suggestion.fixedWinOdds = odds;
+      if (odds) {
+        serverLog(`💰 TAB odds for ${suggestion.horseName} (${race.track} R${race.raceNumber}): $${odds.toFixed(2)}`);
+        oddsFound++;
+      }
+    }
+  }
+  serverLog(`💰 TAB odds found for ${oddsFound} selections`);
+}
+
 // Routes
 app.all('/scrape-now', async (req, res) => {
   try {
@@ -193,6 +297,11 @@ app.all('/scrape-now', async (req, res) => {
       }
       const picksCount = races.filter(r => r.suggestions.length > 0).length;
       serverLog(`✅ Grok AI complete — ${picksCount} picks from ${races.length} races`);
+
+      // Fetch TAB fixed win odds for all selections
+      const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney' })
+        .format(new Date()).split('T')[0];
+      await attachTABOdds(races, date);
     } else {
       races.forEach(r => { r.suggestions = []; r.aiAnalysis = ""; });
     }

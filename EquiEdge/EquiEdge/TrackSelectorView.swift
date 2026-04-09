@@ -10,10 +10,15 @@ struct StateGroup {
     let tracks: [TrackInfo]
 }
 
-struct TrackSelectorView: View {
-    @State private var selectedSlugs: Set<String> = Self.loadSelectedTracks()
+@Observable
+final class TrackSelection {
+    static let shared = TrackSelection()
     
-    private static let allTrackGroups: [StateGroup] = [
+    var selectedSlugs: Set<String> {
+        didSet { save() }
+    }
+    
+    static let allTrackGroups: [StateGroup] = [
         StateGroup(state: "New South Wales", tracks: [
             TrackInfo(name: "Royal Randwick", slug: "randwick"),
             TrackInfo(name: "Rosehill Gardens", slug: "rosehill"),
@@ -114,29 +119,84 @@ struct TrackSelectorView: View {
         "gold-coast", "doomben", "ascot", "eagle-farm"
     ]
     
+    init() {
+        if let data = UserDefaults.standard.data(forKey: "selectedTracks"),
+           let slugs = try? JSONDecoder().decode(Set<String>.self, from: data) {
+            self.selectedSlugs = slugs
+        } else {
+            self.selectedSlugs = Self.defaultSlugs
+        }
+    }
+    
+    private func save() {
+        if let data = try? JSONEncoder().encode(selectedSlugs) {
+            UserDefaults.standard.set(data, forKey: "selectedTracks")
+        }
+    }
+    
+    func isSelected(_ slug: String) -> Bool {
+        selectedSlugs.contains(slug)
+    }
+    
+    func toggle(_ slug: String) {
+        if selectedSlugs.contains(slug) {
+            selectedSlugs.remove(slug)
+        } else {
+            selectedSlugs.insert(slug)
+        }
+    }
+    
+    func selectAll(in group: StateGroup) {
+        for track in group.tracks {
+            selectedSlugs.insert(track.slug)
+        }
+    }
+    
+    func deselectAll(in group: StateGroup) {
+        for track in group.tracks {
+            selectedSlugs.remove(track.slug)
+        }
+    }
+    
+    func selectAll() {
+        for group in Self.allTrackGroups {
+            selectAll(in: group)
+        }
+    }
+    
+    func deselectAll() {
+        selectedSlugs.removeAll()
+    }
+    
+    func allSelected(in group: StateGroup) -> Bool {
+        group.tracks.allSatisfy { selectedSlugs.contains($0.slug) }
+    }
+}
+
+struct TrackSelectorView: View {
+    @Bindable var selection = TrackSelection.shared
+    
     var body: some View {
         List {
-            ForEach(Self.allTrackGroups, id: \.state) { group in
+            ForEach(TrackSelection.allTrackGroups, id: \.state) { group in
                 Section {
                     ForEach(group.tracks, id: \.slug) { track in
-                        Toggle(track.name, isOn: binding(for: track.slug))
+                        Toggle(track.name, isOn: Binding(
+                            get: { selection.isSelected(track.slug) },
+                            set: { _ in selection.toggle(track.slug) }
+                        ))
                     }
                 } header: {
                     HStack {
                         Text(group.state)
                         Spacer()
-                        let allSelected = group.tracks.allSatisfy { selectedSlugs.contains($0.slug) }
-                        Button(allSelected ? "Deselect" : "Select All") {
-                            if allSelected {
-                                for track in group.tracks {
-                                    selectedSlugs.remove(track.slug)
-                                }
+                        let allOn = selection.allSelected(in: group)
+                        Button(allOn ? "Deselect" : "Select All") {
+                            if allOn {
+                                selection.deselectAll(in: group)
                             } else {
-                                for track in group.tracks {
-                                    selectedSlugs.insert(track.slug)
-                                }
+                                selection.selectAll(in: group)
                             }
-                            save()
                         }
                         .font(.caption)
                         .textCase(nil)
@@ -149,55 +209,15 @@ struct TrackSelectorView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Button("Select All") {
-                        for group in Self.allTrackGroups {
-                            for track in group.tracks {
-                                selectedSlugs.insert(track.slug)
-                            }
-                        }
-                        save()
+                        selection.selectAll()
                     }
                     Button("Deselect All") {
-                        selectedSlugs.removeAll()
-                        save()
+                        selection.deselectAll()
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
             }
-        }
-    }
-    
-    private func binding(for slug: String) -> Binding<Bool> {
-        Binding(
-            get: { selectedSlugs.contains(slug) },
-            set: { isOn in
-                if isOn {
-                    selectedSlugs.insert(slug)
-                } else {
-                    selectedSlugs.remove(slug)
-                }
-                save()
-            }
-        )
-    }
-    
-    private func save() {
-        Self.saveSelectedTracks(selectedSlugs)
-    }
-    
-    // MARK: - Persistence
-    
-    static func loadSelectedTracks() -> Set<String> {
-        guard let data = UserDefaults.standard.data(forKey: "selectedTracks"),
-              let slugs = try? JSONDecoder().decode(Set<String>.self, from: data) else {
-            return defaultSlugs
-        }
-        return slugs
-    }
-    
-    static func saveSelectedTracks(_ slugs: Set<String>) {
-        if let data = try? JSONEncoder().encode(slugs) {
-            UserDefaults.standard.set(data, forKey: "selectedTracks")
         }
     }
 }
