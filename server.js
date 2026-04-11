@@ -338,11 +338,18 @@ app.all('/scrape-now', async (req, res) => {
     serverLog(`🔄 Scrape-now called (ai=${req.query.ai || 'false'}, tracks: ${tracks.join(', ')}${raceFilter ? ', filtered' : ''})`);
     const races = await scrapeFormFav(tracks, raceFilter);
     if (req.query.ai === 'true' && XAI_API_KEY) {
-      serverLog(`🚀 Running Grok AI analysis on ${races.length} races...`);
-      for (let race of races) {
-        const result = await analyzeRaceWithGrok(race);
-        race.suggestions = result.selections;
-        race.aiAnalysis = result.analysis;
+      const BATCH_SIZE = 4; // Run 4 Grok calls in parallel
+      serverLog(`🚀 Running Grok AI analysis on ${races.length} races (batches of ${BATCH_SIZE})...`);
+      for (let i = 0; i < races.length; i += BATCH_SIZE) {
+        const batch = races.slice(i, i + BATCH_SIZE);
+        const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+        const totalBatches = Math.ceil(races.length / BATCH_SIZE);
+        serverLog(`📦 Batch ${batchNum}/${totalBatches}: ${batch.map(r => `${r.track} R${r.raceNumber}`).join(', ')}`);
+        const results = await Promise.all(batch.map(race => analyzeRaceWithGrok(race)));
+        for (let j = 0; j < batch.length; j++) {
+          batch[j].suggestions = results[j].selections;
+          batch[j].aiAnalysis = results[j].analysis;
+        }
       }
       const picksCount = races.filter(r => r.suggestions.length > 0).length;
       serverLog(`✅ Grok AI complete — ${picksCount} picks from ${races.length} races`);
