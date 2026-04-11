@@ -67,17 +67,45 @@ async function fetchRace(date, track, raceNumber) {
   }
 }
 
-async function scrapeFormFav(tracks) {
+// Parse the raceFilter param: "caulfield:3,4,5;randwick:2,3,4" → { caulfield: [3,4,5], randwick: [2,3,4] }
+// If no filter provided, returns null (scrape all races 1-10 for each track)
+function parseRaceFilter(filterParam) {
+  if (!filterParam || filterParam.trim() === '') return null;
+  const filter = {};
+  for (const entry of filterParam.split(';')) {
+    const [track, nums] = entry.split(':');
+    if (track && nums) {
+      filter[track.trim()] = nums.split(',').map(n => parseInt(n.trim())).filter(n => !isNaN(n));
+    }
+  }
+  return Object.keys(filter).length > 0 ? filter : null;
+}
+
+async function scrapeFormFav(tracks, raceFilter) {
   const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney' })
     .format(new Date())
     .split('T')[0];
 
   serverLog(`🔄 Fetching real data from FormFav for Sydney date: ${date} (${tracks.length} tracks)`);
+  if (raceFilter) {
+    const totalRaces = Object.values(raceFilter).reduce((sum, nums) => sum + nums.length, 0);
+    serverLog(`🎯 Race filter active: ${totalRaces} future races across ${Object.keys(raceFilter).length} tracks`);
+  }
 
   const allRaces = [];
+  let skippedPast = 0;
 
   for (const track of tracks) {
+    // Determine which race numbers to fetch for this track
+    const allowedRaces = raceFilter ? (raceFilter[track] || []) : null;
+
     for (let raceNum = 1; raceNum <= 10; raceNum++) {
+      // If we have a filter and this race isn't in it, skip
+      if (allowedRaces && !allowedRaces.includes(raceNum)) {
+        skippedPast++;
+        continue;
+      }
+
       const data = await fetchRace(date, track, raceNum);
       if (data && data.runners && data.runners.length > 0) {
         const race = {
@@ -105,7 +133,10 @@ async function scrapeFormFav(tracks) {
     }
   }
 
-  serverLog(`✅ FormFav loaded ${allRaces.length} real races`);
+  if (skippedPast > 0) {
+    serverLog(`⏭️ Skipped ${skippedPast} past/filtered races`);
+  }
+  serverLog(`✅ FormFav loaded ${allRaces.length} upcoming races`);
   return allRaces;
 }
 
@@ -180,9 +211,10 @@ app.all('/scrape-now', async (req, res) => {
     }
 
     const tracks = tracksParam.split(',').map(t => t.trim()).filter(Boolean);
-    serverLog(`🔄 Scrape-now called (ai=${req.query.ai || 'false'}, tracks: ${tracks.join(', ')})`);
+    const raceFilter = parseRaceFilter(req.query.raceFilter);
+    serverLog(`🔄 Scrape-now called (ai=${req.query.ai || 'false'}, tracks: ${tracks.join(', ')}${raceFilter ? ', filtered' : ''})`);
 
-    const races = await scrapeFormFav(tracks);
+    const races = await scrapeFormFav(tracks, raceFilter);
 
     if (req.query.ai === 'true' && XAI_API_KEY) {
       serverLog(`🚀 Running Grok AI analysis on ${races.length} races...`);
