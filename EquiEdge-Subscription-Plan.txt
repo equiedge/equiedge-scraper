@@ -1,0 +1,296 @@
+================================================================================
+EQUIEDGE APP STORE RELEASE PLAN — SUBSCRIPTION MODEL
+================================================================================
+
+TIER OVERVIEW
+--------------------------------------------------------------------------------
+
+  Trial (Free)
+    - 3 free track-day analyses
+    - Expires after 3 days from account creation OR 3 track-days used (whichever first)
+    - No payment required, but Sign in with Apple required
+
+  Basic — $14.99/month ($11.99/month billed annually at $143.88/yr)
+    - 10 track-day analyses per week (resets Monday)
+    - All races within an analysed track included
+    - Re-analysing the same track on the same day does NOT count again
+
+  Pro — $34.99/month ($28.99/month billed annually at $347.88/yr)
+    - Unlimited track-day analyses
+    - All tracks, all races
+
+  Expired (no subscription, trial over)
+    - Hard paywall on Edge AI analysis
+    - Can still browse race listings, runner fields, TAB odds (app is not blank)
+
+
+AUTHENTICATION — SIGN IN WITH APPLE
+--------------------------------------------------------------------------------
+
+  Why:
+    - Prevents trial abuse (reinstall/new device = same Apple ID = same account)
+    - Ties subscription status to a server-side user record
+    - Minimal friction (one tap, no email/password)
+    - Apple favours apps that use Sign in with Apple during review
+
+  Flow:
+    1. First launch -> Sign in with Apple prompt (required before any use)
+    2. Apple returns a stable user identifier (per-app, per-Apple-ID)
+    3. App sends identifier to Vercel backend -> creates or retrieves user record
+    4. Backend returns: { userId, tier, trialStartDate, trialUsage, weeklyUsage }
+    5. Subsequent launches: cached userId in Keychain, validated against backend
+
+  User record (stored on Vercel backend):
+    - appleUserId: String (stable identifier from Sign in with Apple)
+    - tier: "trial" | "basic" | "pro" | "expired"
+    - trialStartDate: ISO date (set on first sign-in)
+    - trialUsage: ["randwick_2026-04-13", ...] (max 3)
+    - weeklyUsage: { isoWeek: "2026-W16", tracks: ["randwick_2026-04-13", ...] }
+    - subscriptionExpiresAt: ISO date (from App Store Server Notifications)
+    - createdAt: ISO date
+
+  Why Keychain (not UserDefaults):
+    - Survives app deletion/reinstall on same device
+    - Cannot be cleared by user without full device reset
+    - Extra layer of trial abuse prevention
+
+
+TRACK-DAY COUNTING RULES
+--------------------------------------------------------------------------------
+
+  What counts as "1 track-day":
+    - Running analysis on "Randwick" on Monday = 1
+    - Running analysis on "Randwick" on Tuesday = 2 (different day)
+    - Re-running "Randwick" on Monday (refresh) = still 1 (same track-day)
+
+  Storage:
+    - Server-side on user record (authoritative)
+    - Composite key format: "randwick_2026-04-13"
+    - Basic: weeklyUsage.tracks.count < 10 OR key already exists (free re-run)
+    - Trial: trialUsage.count < 3 AND now <= trialStartDate + 3 days
+    - Week resets every Monday (based on ISO week number)
+
+
+SERVER-SIDE CACHE — CONSISTENT AI PICKS
+--------------------------------------------------------------------------------
+
+  Problem:
+    - Multiple users requesting the same track-day triggers redundant scrapes
+    - Grok is non-deterministic: different users could get different horse picks
+    - Concurrent scrapes waste Grok API spend and risk FormFav rate-limiting
+
+  Solution: Cache first analysis per track-day on the backend
+    - Cache key: "randwick_2026-04-13"
+    - Cache value: full JSON (scraped race data + Grok AI analysis)
+    - TTL: end of day (or ~18 hours)
+    - Storage: Vercel KV (Redis) or Upstash Redis (free tier generous)
+
+  Flow:
+    1. User requests analysis for Randwick on 2026-04-13
+    2. Backend checks cache for key "randwick_2026-04-13"
+       HIT  -> Return cached result instantly (no scrape, no Grok call)
+       MISS -> Scrape FormFav, call Grok, store in cache, return result
+    3. All subsequent users that day get identical picks
+
+  Benefits:
+    - Every user sees the same AI selections (credibility/consistency)
+    - Only 1 Grok API call per track-day regardless of user count (cost)
+    - Near-instant response for 2nd+ user (performance)
+    - Reduced FormFav scraping load (risk mitigation)
+
+
+APP STORE CONNECT SETUP
+--------------------------------------------------------------------------------
+
+  1. Create app listing (bundle ID, screenshots, description, privacy policy URL)
+
+  2. Enable Sign in with Apple capability in Xcode + App Store Connect
+
+  3. Create Subscription Group: "EquiEdge Premium"
+     Products (4 auto-renewable subscriptions):
+       - equiedge.basic.monthly    — $14.99
+       - equiedge.basic.annual     — $143.88
+       - equiedge.pro.monthly      — $34.99
+       - equiedge.pro.annual       — $347.88
+
+  4. Set upgrade/downgrade/crossgrade rules (Pro > Basic within group)
+
+  5. Configure App Store Server Notifications V2
+     - Point to Vercel endpoint: /api/apple-notifications
+     - Handles: SUBSCRIBED, DID_RENEW, EXPIRED, DID_REVOKE, REFUND
+     - Updates user tier on backend in real-time
+
+  6. Create StoreKit Configuration file (.storekit) for local testing
+
+
+VERCEL BACKEND CHANGES
+--------------------------------------------------------------------------------
+
+  New endpoints:
+
+    POST /api/auth/apple
+      - Receives Apple identity token + user identifier
+      - Validates token with Apple (verify signature + claims)
+      - Creates or retrieves user record
+      - Returns: { userId, tier, trialStartDate, usage }
+
+    GET /api/user/status
+      - Header: Authorization: Bearer <userId>
+      - Returns current tier, usage counts, limits
+      - App calls this on launch + before analysis
+
+    POST /api/user/record-usage
+      - Called after successful analysis
+      - Body: { trackSlug, date }
+      - Server records usage, returns updated counts
+
+    POST /api/apple-notifications
+      - App Store Server Notifications V2 webhook
+      - Updates user tier based on subscription events
+      - Handles: subscribe, renew, expire, revoke, refund
+
+  New infrastructure:
+    - Vercel KV or Upstash Redis for race analysis cache
+    - User storage: Vercel Postgres (free tier) or Upstash Redis
+      (Redis is simpler for key-value user records, Postgres is
+      better if you need queries/analytics later)
+
+
+NEW iOS FILES TO CREATE
+--------------------------------------------------------------------------------
+
+  AuthManager.swift
+    - Sign in with Apple integration (AuthenticationServices framework)
+    - Stores userId in Keychain
+    - Sends Apple identity token to /api/auth/apple on sign-in
+    - Checks Keychain on launch for existing session
+    - Exposes: isSignedIn, userId, signIn(), signOut()
+
+  SubscriptionManager.swift
+    - @Observable class, depends on AuthManager
+    - Uses StoreKit 2 (Product, Transaction) for purchasing
+    - Tier/usage state synced from backend via /api/user/status
+    - Exposes:
+        currentTier: SubscriptionTier  (.trial | .basic | .pro | .expired)
+        isAnnual: Bool
+        trackDaysUsedThisWeek: Int
+        trackDayLimit: Int?  (nil = unlimited for Pro)
+        trialDaysRemaining: Int
+        trialUsesRemaining: Int
+        canAnalyseTrack(_ slug: String, on date: Date) -> Bool
+        purchase(_ product: Product) async throws
+        restorePurchases() async
+        refreshStatus() async  (calls /api/user/status)
+    - After purchase: StoreKit 2 Transaction verified, backend notified
+      via App Store Server Notifications (no manual receipt upload needed)
+
+  PaywallView.swift
+    - Shown when user cannot run analysis (expired trial or Basic limit hit)
+    - Tier comparison table (Basic vs Pro features)
+    - Monthly / Annual toggle
+    - Purchase buttons using StoreKit 2
+    - Restore Purchases button
+    - Terms of Use / Privacy Policy links (required by Apple)
+    - Contextual messaging:
+        Trial expired: "Your free trial has ended. Subscribe to continue."
+        Basic limit:   "You've used 10/10 track analyses this week. Upgrade to Pro."
+
+  SignInView.swift
+    - Shown on first launch (before main app content)
+    - Sign in with Apple button (ASAuthorizationAppleIDButton)
+    - Brief value proposition / app intro above the button
+    - After sign-in: transitions to main app (trial auto-starts)
+
+
+CHANGES TO EXISTING iOS FILES
+--------------------------------------------------------------------------------
+
+  EquiEdgeApp.swift
+    - Inject AuthManager + SubscriptionManager into environment
+    - Root view: SignInView if not authenticated, else ContentView
+    - Start Transaction.updates listener on launch
+
+  DataService.swift
+    - In refreshScrape(), check subscription tier before sending tracks
+    - Pass userId in API requests (for server-side usage tracking)
+    - After successful analysis, backend records usage automatically
+    - Throw SubscriptionError.weeklyLimitReached or .trialExpired if blocked
+
+  TodayRacesView.swift
+    - Catch SubscriptionError in performAnalysis() -> present PaywallView
+    - Show usage indicator for Basic users: "3/10 tracks this week"
+    - Show trial indicator: "2/3 free analyses remaining (1 day left)"
+
+  SettingsView.swift
+    - Add "Account" section:
+        Apple ID display (email if shared, or "Private email")
+        Sign Out button
+    - Add "Subscription" section:
+        Current plan display
+        Manage / Upgrade button -> PaywallView
+        Restore Purchases button
+
+  TrackSelectorView.swift
+    - Soft indicator for Basic users: "10 track-day analyses/week on Basic"
+    - No hard gate here, just informational
+
+
+PAYWALL TRIGGER MATRIX
+--------------------------------------------------------------------------------
+
+  Scenario                                    | Result
+  --------------------------------------------|----------------------------------
+  Not signed in                               | SignInView (must auth first)
+  Trial user, uses remaining                  | Analysis runs, usage counted
+  Trial user, 3 used OR 3 days elapsed        | Paywall shown
+  Expired user taps Edge AI                   | Paywall shown
+  Basic user, within 10/week                  | Analysis runs, usage counted
+  Basic user, hits 10/week                    | Upgrade prompt (paywall to Pro)
+  Pro user                                    | Always runs, no limits
+
+
+APP STORE REVIEW REQUIREMENTS
+--------------------------------------------------------------------------------
+
+  - Sign in with Apple: must handle all states (new user, returning, revoked)
+  - Privacy Policy: hosted URL, linked in App Store Connect and in-app
+  - Terms of Use: hosted URL, linked in-app
+  - Restore Purchases: accessible from Settings (required by Apple)
+  - StoreKit testing in sandbox before submission
+  - Trial tied to Apple ID via backend (no reinstall abuse)
+  - App must show value before paywall: race browsing, odds, runner fields
+    visible to all users. Only AI analysis is gated.
+  - Data collection disclosure: Apple user identifier stored server-side
+
+
+IMPLEMENTATION ORDER
+--------------------------------------------------------------------------------
+
+  Phase 1 — Backend (Vercel)
+    1. Set up Vercel KV or Upstash Redis
+    2. Build /api/auth/apple endpoint (token validation + user creation)
+    3. Build /api/user/status endpoint
+    4. Build /api/user/record-usage endpoint
+    5. Add race analysis cache layer to existing scrape endpoint
+    6. Build /api/apple-notifications webhook
+
+  Phase 2 — iOS Auth + Subscription
+    7. Add Sign in with Apple capability in Xcode
+    8. Build AuthManager.swift (Keychain + Apple sign-in)
+    9. Build SubscriptionManager.swift (StoreKit 2 + backend sync)
+    10. Build SignInView.swift
+    11. Build PaywallView.swift
+
+  Phase 3 — iOS Integration
+    12. Update EquiEdgeApp.swift (auth gate + environment injection)
+    13. Gate DataService.refreshScrape() with subscription checks
+    14. Update TodayRacesView with usage indicators + paywall triggers
+    15. Update SettingsView with account + subscription sections
+    16. Create StoreKit configuration file for local testing
+
+  Phase 4 — App Store Connect
+    17. Create subscription products in App Store Connect
+    18. Configure App Store Server Notifications V2
+    19. Add Privacy Policy / Terms of Use URLs
+    20. Test full flow in StoreKit sandbox
+    21. Submit for App Store review
