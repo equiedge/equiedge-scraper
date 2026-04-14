@@ -1,5 +1,5 @@
-// server.js - EquiEdge Scraper (FormFav + Grok AI) - Grok 4.1 Fast + Live Logs
-// Updated: Revised handicapping methodology with contextual red flags, X-based real-time intel, value awareness
+// server.js - EquiEdge Scraper (FormFav Pro + Grok AI) - Grok 4.1 Fast + Live Logs
+// Updated: FormFav Pro tier — speed maps, class profiles, badges, predictions, track bias, jockey/trainer stats
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
@@ -17,6 +17,11 @@ function serverLog(msg) {
   console.log(line);
   if (serverLogs.length > 500) serverLogs.splice(0, serverLogs.length - 500);
 }
+
+// In-memory caches for the current scrape session
+let trackBiasCache = {};    // { trackSlug: biasData }
+let jockeyStatsCache = {};  // { jockeyName: statsData }
+let trainerStatsCache = {}; // { trainerName: statsData }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // REVISED Structured Grok AI Prompt — handicapping methodology v2
@@ -50,7 +55,18 @@ Identify the race type:
 - Set weights: a middle ground — classes of horses carry set amounts
 - Maiden/Class restricted: form figures can be misleading as the class ceiling is lower
 
-STEP 2 — FORM ANALYSIS:
+STEP 2 — PACE ANALYSIS (Speed Map Data):
+Assess the paceScenario for this race:
+- SLOW: No genuine speed — leaders can dictate. Favour L (Leader) runners, especially from inside barriers.
+- MODERATE: One likely leader. Favour P (Presser) runners who can sit behind without being caught wide.
+- FAST: Multiple speed runners competing. Favour M (Midfield) and B (Back) runners who can pick up the pieces.
+- VERY_FAST: Hot tempo expected. Strongly favour closers (B). Leaders are likely to tire.
+
+Cross-reference each contender's earlySpeedIndex and settlingPosition against the pace scenario.
+A high-ESI runner drawn wide in a FAST-pace race burns energy twice — getting across AND competing for the lead.
+A back runner in a SLOW-pace race may never get close enough to challenge.
+
+STEP 3 — FORM ANALYSIS:
 For each serious contender, read form right-to-left (rightmost = most recent). Assess:
 
 POSITIVE INDICATORS:
@@ -73,14 +89,29 @@ GEAR CHANGES (if data available):
 - Winkers, cross-over nosebands, pacifiers: minor adjustments, less predictive
 - Gear OFF (blinkers removed, etc.): sometimes a positive sign that the horse has matured
 
-STEP 3 — CONDITIONS MATCH:
-This step is critical and should be re-weighted if Step 6 identifies a track bias.
+FORM BADGES (Pre-computed insights):
+The decorators/badges are pre-computed contextual assessments. Use them as:
+- CONFIRMATION: Positive badges that align with your analysis STRENGTHEN confidence
+- WARNING: Negative badges that conflict with your analysis are RED FLAGS that must be addressed
+- EFFICIENCY: Badge categories map to analysis steps:
+  * "form" badges → Step 3 (Form Analysis)
+  * "specialization" badges → Step 4 (Conditions Match)
+  * "conditions" badges → Step 4 (Conditions Match)
+  * "fitness" badges → Spell analysis
+  * "running_style" badges → Step 2 (Pace Analysis)
+  * "class" badges → Step 6 (Class & Weight)
+  * "barrier" badges → Step 4 (Conditions + Track Bias)
+  * "connections" badges → Step 7 (Connections)
+- Note any CONFLICTS between your analysis and badge sentiment in your reasoning
+
+STEP 4 — CONDITIONS MATCH:
+This step is critical and should be re-weighted if Step 8 identifies a track bias.
 
 TRACK CONDITION:
 - Compare goodTrackWinPct vs overall winPct
 - If today is WET and a horse has high goodTrackWinPct but low overall winPct = dry-tracker, negative
 - If today is WET and a horse has proven wet form = significant positive, especially if rivals are unproven on wet ground
-- Track conditions can change throughout a meeting — use the most current condition rating available (see Step 6)
+- Track conditions can change throughout a meeting — use the most current condition rating available (see Step 8)
 
 DISTANCE:
 - distanceWinPct shows proven ability at this trip
@@ -95,15 +126,38 @@ TRACK:
 - Some horses are track specialists — high trackWinPct at a course is a strong positive
 - First time at a track is not a red flag by itself, but combined with other unknowns it adds uncertainty
 
-BARRIER:
+BARRIER & TRACK BIAS (from historical data):
+- biasStrength tells you how significant the barrier bias is at this track: strong > moderate > weak > none
+- Compare each runner's barrier against strongestBarrier and weakestBarrier
+- A runner drawn in the strongest barrier position at a venue with "strong" bias has a genuine data-backed edge
+- This REPLACES the heuristic "wide barrier = bad" rule — use actual advantage values instead
+- If Step 8 (X search) confirms the historical bias, treat it as a STRONG signal
+- If Step 8 contradicts the historical bias (e.g., rail position today changes things), note the conflict
+
+FIRST-UP / SECOND-UP STATS:
+- Use the firstUp and secondUp stats data when assessing horses resuming or at their second run back
+- A horse with 50%+ first-up win rate is a proven fresh performer — override the first-up red flag
+- Second-up stats can reveal "second-up improvers" who need a run under their belt
+
+STEP 5 — CONDITIONS MATCH (continued):
 - Wide barriers (marked WIDE in the data) are a disadvantage in SPRINT races (<1400m) at most tracks
 - BUT: barrier impact is track-specific:
   > Some tracks favour outside draws at certain distances (e.g., Flemington straight, Eagle Farm with inside rail out)
   > Rail position can negate or amplify barrier advantage (rail out 3m+ often helps wide draws)
   > In staying races (2000m+), barrier is less important as the field settles
-- If Step 6 identifies a track bias, barrier analysis should align with that bias
+- If track bias data or Step 8 identifies a bias, barrier analysis should align with that bias
 
-STEP 4 — WEIGHT AND CLASS:
+STEP 6 — CLASS AND WEIGHT:
+CLASS ASSESSMENT (use classProfile + raceClassFit data):
+- assessment="big_drop": Strong class edge — this horse has competed at much higher levels.
+  But check trend: if trend="dropping", the horse may be in decline rather than slumming it.
+- assessment="comfort_zone" + trend="stable": Reliable at this level — no class edge or disadvantage.
+- assessment="slight_rise" + trend="rising": Progressive type being tested — the upward trend supports the step up.
+- assessment="big_rise": Significant class jump — needs exceptional form indicators to overcome.
+- withinOptimalRange=true: The race is within the class range where this horse performs best.
+- classDifference: Positive means stepping up, negative means dropping. Magnitude matters: ±5 is minor, ±15+ is major.
+
+WEIGHT ASSESSMENT:
 Weight impact varies by distance:
 - Sprints (<1200m): weight is less impactful — speed overcomes weight over short trips
 - Middle distance (1400-2000m): moderate impact — 2-3kg is meaningful
@@ -114,6 +168,8 @@ IN HANDICAP RACES:
 - The topweight is the handicapper's top-rated horse but carries the most — needs strong recent form to overcome the impost
 - Dropping in weight from recent runs is a positive sign (getting in well at the weights)
 - A horse that has risen sharply in the weights after a win may now be at its ceiling
+- When a runner has an apprentice claim, use EFFECTIVE weight (weight minus claim) for all comparisons.
+  A 3kg claim on a 58kg allocation = 55kg effective — this is a genuine edge.
 
 IN WFA / SET WEIGHT RACES:
 - Weight differentials are standardised and reflect age/sex, NOT class
@@ -124,20 +180,24 @@ BACK-UP RUNNERS:
 - Horses racing again within 7 days: only positive if the horse is known to thrive on quick turnarounds or the trainer has a strong back-up strike rate
 - Otherwise treat as a mild caution — fatigue risk, especially in longer races
 
-STEP 5 — CONNECTIONS:
-JOCKEY:
+STEP 7 — CONNECTIONS:
+JOCKEY (with data when available):
+- Check jockey's track-specific win rate when provided (e.g. "J. McDonald: 19.9% at Randwick from 312 starts")
+- Note the jockey's condition-specific stats: a jockey with a 22% wet-track win rate vs 14% overall has a genuine wet-track edge
 - Elite jockeys on well-fancied runners: reinforces confidence but rarely adds edge by itself (the market accounts for this)
 - Elite jockey on a horse with moderate form: this IS a potential signal — top riders choose their mounts carefully and may know something
 - Apprentice jockeys: claim (weight reduction) can be significant — a 3kg claim on a well-fancied horse is a genuine edge if the apprentice is competent
 - Jockey changes: a top jockey getting on for the first time can signal stable confidence. A top jockey getting OFF can signal the opposite.
 
-TRAINER:
+TRAINER (with data when available):
+- Check trainer's recent-window win rate — a trainer firing at 25%+ in the last 90 days is in strong form
+- Trainer's track-specific stats: some trainers dominate certain venues
 - Leading trainers at the specific track/meeting: some trainers dominate certain courses
 - First-up trainer strike rates: critical when assessing horses resuming from a spell (see Red Flag Overrides)
 - Trainer/jockey combinations with high strike rates: a strong positive
 - Trainer form cycle: a stable firing at 20%+ is in a purple patch — worth noting
 
-STEP 6 — REAL-TIME INTELLIGENCE (X/Twitter Search):
+STEP 8 — REAL-TIME INTELLIGENCE (X/Twitter Search):
 Search X for today's specific track and meeting to find:
 
 PRIORITY INFORMATION:
@@ -158,19 +218,31 @@ BIAS APPLICATION:
 If a clear track bias is identified from X (e.g., "leaders dominating," "outside runners favoured," "inside 3 lengths off the rail unbeatable"):
 - ELEVATE this factor above standard form analysis
 - A strong bias can override moderate form advantages — a horse with average form drawn to get the bias can beat a better-credentialed horse drawn against it
-- Re-assess Step 3 (barriers, track position) in light of the bias
+- Re-assess Step 4 (barriers, track position) in light of the bias
 - Note the bias strength: early in the day (2-3 races) = tentative; mid-meeting (4-5 races) = meaningful; late meeting (6+ races) = strong signal
 
 If X search returns no relevant track bias or condition data for today's meeting, state "No real-time bias data found" and proceed with analysis based on supplied data only. Do NOT assume or fabricate bias information.
 
-STEP 7 — EDGE IDENTIFICATION:
+STEP 9 — ML MODEL CROSS-REFERENCE:
+The ML prediction model provides an independent, quantitative probability assessment.
+- If your top pick is also the ML model's #1 ranked runner: ADDS CONFIDENCE (+5 to confidence score)
+- If your top pick is ML ranked #2-3: NEUTRAL — your pick is in contention according to the model
+- If your top pick is ML ranked #4+: REQUIRES EXPLANATION — why do you see something the model doesn't?
+  This isn't automatic disqualification, but you must articulate the specific edge the model may be missing.
+- Race-level ML confidence: "high" means clear field separation; "low" means a genuinely open race.
+- In "low" confidence races, lower your own confidence accordingly — if the model can't separate them,
+  be cautious about claiming a strong edge.
+- If no ML data is available, skip this step and note "No ML predictions available".
+
+STEP 10 — EDGE IDENTIFICATION:
 Only select a horse if you can identify a SPECIFIC, data-backed edge:
 - Form/stats clearly stand out vs the field averages
 - Conditions strongly suit this horse over rivals
 - Multiple factors align (form + conditions + connections + data)
 - Track bias (if identified) works in this horse's favour
+- Pace scenario suits this horse's running style
 
-A horse must have at least TWO clear positives from Steps 2-5 with no unresolved red flags to warrant selection. One advantage alone is not sufficient.
+A horse must have at least TWO clear positives from Steps 2-7 with no unresolved red flags to warrant selection. One advantage alone is not sufficient.
 
 RED FLAGS:
 These are caution signals that should significantly lower confidence. Multiple red flags on the same horse = NO SELECTION on that horse.
@@ -184,18 +256,21 @@ These are caution signals that should significantly lower confidence. Multiple r
 - Deteriorating form across the last 4+ starts with no clear excuse (wide runs, traffic, unsuitable conditions)
 - Significant class drop (2+ levels) with no recent competitive form — the horse may be in decline rather than finding its level
 - Backing up within 7 days without a proven record of handling quick turnarounds
+- assessment="big_rise" with no supporting class profile trend — horse may be out of its depth
 
 RED FLAG OVERRIDES (a red flag can be discounted when):
-- First-up from spell: trainer has a first-up strike rate >15% AND/OR the horse has won or placed fresh previously — many elite Australian stables target first-up wins
+- First-up from spell: trainer has a first-up strike rate >15% AND/OR the horse has won or placed fresh previously (check firstUp stats) — many elite Australian stables target first-up wins
 - Distance untried: breeding strongly suggests the trip will suit (e.g., proven stamina sire, dam's side stayed) AND horse has strong closing sectionals at shorter trips
-- Wide barrier: Step 6 identified a track bias favouring outside runners today
+- Wide barrier: Track bias data or Step 8 identified a track bias favouring outside runners today
 - Low distanceWinPct: small sample size (<5 starts at the distance) makes the percentage unreliable
 
-CONFIDENCE CALIBRATION:
-- 60-69: Marginal edge — one clear advantage over the field, conditions suit, no red flags
-- 70-79: Solid edge — multiple factors align (form + conditions + connections), clearly the standout contender
-- 80-89: Strong edge — clearly the best horse on paper with ideal conditions AND a likely market overlay
-- 90+: Dominant — exceptional form in a weak field with perfect conditions (extremely rare — use this no more than once per 20 race cards)
+CONFIDENCE CALIBRATION (updated for Pro data):
+- 60-69: Marginal edge — one clear advantage, conditions suit, no red flags
+- 70-79: Solid edge — multiple factors align (form + conditions + connections), clearly standout
+- 80-89: Strong edge — clearly best on paper WITH ideal conditions AND ML model agreement (top-3 ranked)
+  AND class fit advantage (comfort_zone or slight_drop within optimal range)
+- 90+: Dominant — exceptional form in weak field, perfect conditions, ML model #1, strong class edge
+  (extremely rare — max once per 20 race cards)
 
 UNIT SIZING:
 - 1-3 units: Confidence 60-69
@@ -206,22 +281,30 @@ UNIT SIZING:
 Return ONLY valid JSON in this format:
 {
   "analysis": {
-    "step1_field": "Field assessment: size, quality, race type (handicap/WFA/set weights/maiden), competitiveness.",
-    "step2_form": "Form analysis of serious contenders. Read form RIGHT to LEFT (rightmost = most recent). Who is improving, who is declining, who is consistent? Note any gear changes.",
-    "step3_conditions": "How do today's track condition, distance, and barriers suit or hinder each contender? Flag any dry-trackers on wet ground or vice versa.",
-    "step4_weight": "Weight analysis — who benefits, who is burdened? Adjust assessment based on race type (handicap vs WFA) and distance.",
-    "step5_connections": "Jockey/trainer assessment — any elite or in-form combinations? Jockey changes? Apprentice claims?",
-    "step6_intelligence": "X search results: track bias (with source), condition updates, late scratchings. State 'No real-time bias data found' if nothing relevant.",
-    "step7_edge": "Final verdict — is there a genuine edge? Does the horse have at least TWO clear positives? Are red flags resolved? If not selecting, explain why."
+    "step1_field": "Field assessment: size, quality, race type, race class, competitiveness.",
+    "step2_pace": "Pace analysis: pace scenario, speed map assessment, which running styles are favoured.",
+    "step3_form": "Form analysis of serious contenders. Read form RIGHT to LEFT. Who is improving, declining, consistent? Note badges that confirm or conflict.",
+    "step4_conditions": "How do today's track condition, distance, track bias, and barriers suit or hinder each contender?",
+    "step5_firstup": "First-up/second-up stats assessment for resuming horses. Skip if no horses resuming.",
+    "step6_class_weight": "Class assessment using classProfile data + weight analysis. Note apprentice claims.",
+    "step7_connections": "Jockey/trainer assessment with stats data where available.",
+    "step8_intelligence": "X search results: track bias (with source), condition updates. State 'No real-time bias data found' if nothing relevant.",
+    "step9_ml": "ML model cross-reference. Note agreement or disagreement with your pick.",
+    "step10_edge": "Final verdict — is there a genuine edge? Does the horse have at least TWO clear positives? Are red flags resolved?"
   },
   "selections": [
     {
       "horseName": "Exact Horse Name",
       "confidence": 72,
       "units": 5,
-      "reason": "Concise summary referencing specific data: form figures, stat percentages, weight diff, conditions match.",
-      "redFlagsChecked": "List any red flags considered and whether they were overridden (with reason) or confirmed as concerns. State 'None' if no flags apply.",
-      "trackBias": "Bias identified from X and how it affects this selection, or 'None identified'."
+      "reason": "Concise summary referencing specific data points...",
+      "redFlagsChecked": "List any red flags considered and whether they were overridden. State 'None' if no flags apply.",
+      "trackBias": "Bias identified from data and/or X and how it affects this selection, or 'None identified'.",
+      "paceAssessment": "How the pace scenario suits this horse's running style.",
+      "classAssessment": "Class fit assessment from classProfile data.",
+      "mlModelRank": 1,
+      "mlWinProb": 0.283,
+      "keyBadges": ["Last Start Winner (+)", "Track Specialist (+)", "Fitness: Race Hardened (+)"]
     }
   ]
 }
@@ -229,12 +312,13 @@ Return ONLY valid JSON in this format:
 Rules:
 - AT MOST ONE horse per race. Return empty selections array if no genuine edge.
 - Only select if confidence is 60+.
-- Horse must have at least TWO clear positives from Steps 2-5 to warrant selection.
+- Horse must have at least TWO clear positives from Steps 2-7 to warrant selection.
 - If multiple red flags apply to the only viable contender, return empty selections.
 - The "reason" MUST reference specific data points from the race data.
-- Do not fabricate X/real-time data. If no bias data exists, say so explicitly in step6_intelligence.
+- Do not fabricate X/real-time data. If no bias data exists, say so explicitly in step8_intelligence.
 - Confidence 80+ requires identifying a likely market overlay, not just the best horse on paper.
-- ALWAYS provide ALL 7 analysis steps regardless of whether you make a selection.`;
+- ALWAYS provide ALL 10 analysis steps regardless of whether you make a selection.
+- mlModelRank, mlWinProb, and keyBadges may be null if data is not available.`;
 
 // Parse form string into structured results (most recent run is rightmost)
 function parseFormString(formStr) {
@@ -280,7 +364,7 @@ function parseFormString(formStr) {
 
 // Pre-compute derived metrics for the AI
 function enrichRaceData(race) {
-  const runners = race.runners || [];
+  const runners = (race.runners || []).filter(r => !r.scratched);
   const fieldSize = runners.length;
   // Parse track condition (e.g., "Good 4", "Soft 6", "Heavy 8")
   const condMatch = (race.condition || '').match(/^(\w+)\s*(\d+)?$/);
@@ -302,26 +386,71 @@ function enrichRaceData(race) {
   const avgWeight = fieldSize > 0 ? runners.reduce((s, r) => s + (r.weight || 0), 0) / fieldSize : 0;
   const avgWinPct = fieldSize > 0 ? runners.reduce((s, r) => s + (r.stats?.winPct || 0), 0) / fieldSize : 0;
   const avgFormScore = fieldSize > 0 ? runners.reduce((s, r) => s + (r.stats?.recentFormScore || 0), 0) / fieldSize : 0;
+  const avgClassRating = fieldSize > 0 ? runners.reduce((s, r) => s + (r.classProfile?.currentRating || 0), 0) / fieldSize : 0;
+
+  // Track bias data
+  const trackBias = race.trackBiasData || null;
+  // Predictions data
+  const predictions = race.predictionsData || null;
+  const predictionsByRunner = {};
+  if (predictions && predictions.runners) {
+    for (const p of predictions.runners) {
+      predictionsByRunner[p.runnerNumber || p.number] = p;
+    }
+  }
+
   // Enrich each runner
   const enrichedRunners = runners.map(r => {
     const formData = parseFormString(r.form);
-    // Detect if horse is first-up from a spell (rightmost char before current run is 'x')
     const formChars = (r.form || '').split('');
     const isFirstUp = formChars.length >= 2 && formChars[formChars.length - 1] !== 'x' && formChars.includes('x') && formChars.lastIndexOf('x') === formChars.length - 2;
-    // Detect if horse is resuming (last character is first run back, preceded by x)
     const isResuming = formChars.length >= 1 && formChars[formChars.length - 1] === 'x';
+
+    // Effective weight with apprentice claim
+    const effectiveWeight = (r.weight || 0) - (r.claim || 0);
+
+    // Track bias: per-runner barrier advantage
+    let barrierAdvantage = null;
+    if (trackBias && trackBias.barriers) {
+      const biasEntry = trackBias.barriers.find(b => b.barrier === r.barrier);
+      if (biasEntry) barrierAdvantage = biasEntry.advantage || null;
+    }
+
+    // ML prediction for this runner
+    const pred = predictionsByRunner[r.number] || null;
+
+    // Decorator summary
+    let badgeSummary = null;
+    if (r.decorators && r.decorators.length > 0) {
+      const pos = r.decorators.filter(d => d.sentiment === '+').length;
+      const neg = r.decorators.filter(d => d.sentiment === '-').length;
+      badgeSummary = { positive: pos, negative: neg, total: r.decorators.length };
+    }
+
+    // Jockey/trainer stats from cache
+    const jockeyStats = jockeyStatsCache[(r.jockey || '').toLowerCase().trim()] || null;
+    const trainerStats = trainerStatsCache[(r.trainer || '').toLowerCase().trim()] || null;
+
     return {
       ...r,
       formParsed: formData.summary,
       weightDiff: parseFloat(((r.weight || 0) - avgWeight).toFixed(1)),
+      effectiveWeight: parseFloat(effectiveWeight.toFixed(1)),
+      effectiveWeightDiff: parseFloat((effectiveWeight - avgWeight).toFixed(1)),
       winPctDiff: parseFloat(((r.stats?.winPct || 0) - avgWinPct).toFixed(1)),
       recentFormDiff: parseFloat(((r.stats?.recentFormScore || 0) - avgFormScore).toFixed(1)),
       isWideBarrier: (r.barrier || 0) > fieldSize * 0.7,
       isFirstUp,
       isResuming,
-      hasRecentFail: formChars.slice(-3).includes('f')
+      hasRecentFail: formChars.slice(-3).includes('f'),
+      barrierAdvantage,
+      prediction: pred,
+      badgeSummary,
+      jockeyStats,
+      trainerStats,
     };
   });
+
   return {
     ...race,
     runners: enrichedRunners,
@@ -329,10 +458,13 @@ function enrichRaceData(race) {
     trackCondition: { rating: conditionRating, number: conditionNumber, isWet },
     distanceMeters,
     distanceCategory,
+    trackBias,
+    mlModelConfidence: predictions?.confidence || null,
     fieldAvg: {
       weight: parseFloat(avgWeight.toFixed(1)),
       winPct: parseFloat(avgWinPct.toFixed(1)),
-      recentFormScore: parseFloat(avgFormScore.toFixed(1))
+      recentFormScore: parseFloat(avgFormScore.toFixed(1)),
+      classRating: parseFloat(avgClassRating.toFixed(1)),
     }
   };
 }
@@ -350,6 +482,95 @@ async function fetchRace(date, track, raceNumber) {
     }
     return null;
   }
+}
+
+// Phase 2: Fetch track bias data (cached per track per session)
+async function fetchTrackBias(track) {
+  if (trackBiasCache[track]) return trackBiasCache[track];
+  try {
+    const url = `https://api.formfav.com/v1/stats/track-bias/${track}?race_code=gallops&min_starts=50&window=90`;
+    const { data } = await axios.get(url, {
+      headers: { 'X-API-Key': FORMAV_API_KEY }
+    });
+    trackBiasCache[track] = data;
+    serverLog(`Track bias loaded for ${track} (bias: ${data.biasStrength || 'unknown'})`);
+    return data;
+  } catch (err) {
+    serverLog(`Track bias fetch failed for ${track}: ${err.message}`);
+    return null;
+  }
+}
+
+// Phase 2: Fetch ML predictions per race
+async function fetchPredictions(date, track, raceNumber) {
+  try {
+    const url = `https://api.formfav.com/v1/predictions?date=${date}&track=${track}&race=${raceNumber}&race_code=gallops`;
+    const { data } = await axios.get(url, {
+      headers: { 'X-API-Key': FORMAV_API_KEY }
+    });
+    return data;
+  } catch (err) {
+    serverLog(`Predictions fetch failed for ${track} R${raceNumber}: ${err.message}`);
+    return null;
+  }
+}
+
+// Phase 4: Fetch jockey stats (cached per session)
+async function fetchJockeyStats(name) {
+  if (!name) return null;
+  const key = name.toLowerCase().trim();
+  if (jockeyStatsCache[key]) return jockeyStatsCache[key];
+  try {
+    const url = `https://api.formfav.com/v1/stats/jockey/${encodeURIComponent(name)}?race_code=gallops&window=90`;
+    const { data } = await axios.get(url, {
+      headers: { 'X-API-Key': FORMAV_API_KEY }
+    });
+    jockeyStatsCache[key] = data;
+    return data;
+  } catch (err) {
+    jockeyStatsCache[key] = null;
+    return null;
+  }
+}
+
+// Phase 4: Fetch trainer stats (cached per session)
+async function fetchTrainerStats(name) {
+  if (!name) return null;
+  const key = name.toLowerCase().trim();
+  if (trainerStatsCache[key]) return trainerStatsCache[key];
+  try {
+    const url = `https://api.formfav.com/v1/stats/trainer/${encodeURIComponent(name)}?race_code=gallops&window=90`;
+    const { data } = await axios.get(url, {
+      headers: { 'X-API-Key': FORMAV_API_KEY }
+    });
+    trainerStatsCache[key] = data;
+    return data;
+  } catch (err) {
+    trainerStatsCache[key] = null;
+    return null;
+  }
+}
+
+// Phase 4: Batch fetch jockey/trainer stats for all unique names in a track's races
+async function fetchConnectionStats(races) {
+  const jockeys = new Set();
+  const trainers = new Set();
+  for (const race of races) {
+    for (const r of (race.runners || [])) {
+      if (r.jockey) jockeys.add(r.jockey);
+      if (r.trainer) trainers.add(r.trainer);
+    }
+  }
+  serverLog(`Fetching stats for ${jockeys.size} jockeys, ${trainers.size} trainers...`);
+  const BATCH = 5;
+  const allNames = [...[...jockeys].map(n => ({ type: 'jockey', name: n })), ...[...trainers].map(n => ({ type: 'trainer', name: n }))];
+  for (let i = 0; i < allNames.length; i += BATCH) {
+    const batch = allNames.slice(i, i + BATCH);
+    await Promise.all(batch.map(({ type, name }) =>
+      type === 'jockey' ? fetchJockeyStats(name) : fetchTrainerStats(name)
+    ));
+  }
+  serverLog(`Connection stats loaded (${Object.keys(jockeyStatsCache).length} jockeys, ${Object.keys(trainerStatsCache).length} trainers cached)`);
 }
 
 // Parse the raceFilter param: "caulfield:3,4,5;randwick:2,3,4" -> { caulfield: [3,4,5], randwick: [2,3,4] }
@@ -370,24 +591,35 @@ async function scrapeFormFav(tracks, raceFilter) {
   const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney' })
     .format(new Date())
     .split('T')[0];
-  serverLog(`Fetching real data from FormFav for Sydney date: ${date} (${tracks.length} tracks)`);
+  serverLog(`Fetching real data from FormFav Pro for Sydney date: ${date} (${tracks.length} tracks)`);
   if (raceFilter) {
     const totalRaces = Object.values(raceFilter).reduce((sum, nums) => sum + nums.length, 0);
     serverLog(`Race filter active: ${totalRaces} future races across ${Object.keys(raceFilter).length} tracks`);
   }
+
+  // Clear session caches at the start of each scrape
+  trackBiasCache = {};
+  jockeyStatsCache = {};
+  trainerStatsCache = {};
+
   const allRaces = [];
   let skippedPast = 0;
+
   for (const track of tracks) {
-    // Determine which race numbers to fetch for this track
+    // Phase 2: Fetch track bias data (one call per track, cached)
+    const trackBias = await fetchTrackBias(track);
+
     const allowedRaces = raceFilter ? (raceFilter[track] || []) : null;
+    const trackRaces = [];
+
     for (let raceNum = 1; raceNum <= 10; raceNum++) {
-      // If we have a filter and this race isn't in it, skip
       if (allowedRaces && !allowedRaces.includes(raceNum)) {
         skippedPast++;
         continue;
       }
       const data = await fetchRace(date, track, raceNum);
       if (data && data.runners && data.runners.length > 0) {
+        // Phase 1: Expanded runner/race mapping with Pro fields
         const race = {
           id: `${track}-R${raceNum}`,
           date: new Date(date),
@@ -396,26 +628,66 @@ async function scrapeFormFav(tracks, raceFilter) {
           distance: data.distance || "Unknown",
           condition: data.condition || "Good 4",
           weather: data.weather || "Fine",
-          runners: data.runners.map(r => ({
-            number: r.number,
-            name: r.name,
-            jockey: r.jockey || "",
-            trainer: r.trainer || "",
-            weight: r.weight || 0,
-            barrier: r.barrier || 0,
-            form: r.form || "",
-            stats: r.stats || {}
-          }))
+          // New Pro race-level fields
+          paceScenario: data.paceScenario || null,
+          raceClass: data.raceClass || null,
+          raceName: data.raceName || null,
+          startTime: data.startTime || null,
+          numberOfRunners: data.numberOfRunners || 0,
+          trackBiasData: trackBias || null,
+          predictionsData: null, // filled below
+          runners: data.runners
+            .filter(r => !r.scratched) // Filter scratched runners
+            .map(r => ({
+              number: r.number,
+              name: r.name,
+              jockey: r.jockey || "",
+              trainer: r.trainer || "",
+              weight: r.weight || 0,
+              barrier: r.barrier || 0,
+              form: r.form || "",
+              stats: {
+                ...(r.stats || {}),
+                firstUp: r.stats?.firstUp || null,
+                secondUp: r.stats?.secondUp || null,
+              },
+              // New Pro runner-level fields
+              age: r.age || null,
+              claim: r.claim || null,
+              scratched: r.scratched || false,
+              decorators: r.decorators || null,
+              speedMap: r.speedMap || null,
+              classProfile: r.classProfile || null,
+              raceClassFit: r.raceClassFit || null,
+            }))
         };
+        trackRaces.push(race);
         allRaces.push(race);
-        serverLog(`Loaded ${track} R${raceNum} (${race.runners.length} runners)`);
+        serverLog(`Loaded ${track} R${raceNum} (${race.runners.length} runners${data.paceScenario ? `, pace: ${data.paceScenario}` : ''})`);
       }
     }
+
+    // Phase 2: Fetch predictions for all races on this track in parallel
+    if (trackRaces.length > 0) {
+      serverLog(`Fetching ML predictions for ${trackRaces.length} races at ${track}...`);
+      const predResults = await Promise.all(
+        trackRaces.map(r => fetchPredictions(date, track, r.raceNumber))
+      );
+      for (let i = 0; i < trackRaces.length; i++) {
+        trackRaces[i].predictionsData = predResults[i] || null;
+      }
+    }
+
+    // Phase 4: Fetch jockey/trainer stats for this track's races
+    if (trackRaces.length > 0) {
+      await fetchConnectionStats(trackRaces);
+    }
   }
+
   if (skippedPast > 0) {
     serverLog(`Skipped ${skippedPast} past/filtered races`);
   }
-  serverLog(`FormFav loaded ${allRaces.length} upcoming races`);
+  serverLog(`FormFav Pro loaded ${allRaces.length} upcoming races`);
   return allRaces;
 }
 
@@ -438,24 +710,68 @@ async function analyzeRaceWithGrok(race) {
       if (r.weightDiff >= 3) flags.push(`HEAVY WEIGHT (+${r.weightDiff}kg)`);
       const flagStr = flags.length > 0 ? `\n  FLAGS: ${flags.join(', ')}` : '';
 
+      // Weight line with apprentice claim
+      const claimStr = r.claim ? ` (claim: ${r.claim}kg = ${r.effectiveWeight}kg effective, ${r.effectiveWeightDiff > 0 ? '+' : ''}${r.effectiveWeightDiff}kg vs field avg)` : ` (${r.weightDiff > 0 ? '+' : ''}${r.weightDiff}kg vs field avg)`;
+
+      // Barrier with track bias advantage
+      const biasStr = r.barrierAdvantage != null ? ` | Barrier Bias: ${r.barrierAdvantage > 0 ? '+' : ''}${r.barrierAdvantage.toFixed(1)}% advantage` : '';
+
+      // First-up / second-up stats
+      const fuStats = r.stats?.firstUp;
+      const suStats = r.stats?.secondUp;
+      const fuLine = fuStats && fuStats.starts > 0 ? `\n  First-Up: ${fuStats.starts} starts, ${fuStats.wins}W (${(fuStats.winPercent || 0).toFixed(0)}% win, ${(fuStats.placePercent || 0).toFixed(0)}% place)` : '';
+      const suLine = suStats && suStats.starts > 0 ? `\n  Second-Up: ${suStats.starts} starts, ${suStats.wins}W (${(suStats.winPercent || 0).toFixed(0)}% win, ${(suStats.placePercent || 0).toFixed(0)}% place)` : '';
+
+      // Speed map
+      const sm = r.speedMap;
+      const smLine = sm ? `\n  Speed Map: ${sm.runningStyle || 'X'} | ESI: ${(sm.earlySpeedIndex || 0).toFixed(1)} | Settling Pos: ${(sm.settlingPosition || 0).toFixed(1)}` : '';
+
+      // Class profile
+      const cp = r.classProfile;
+      const rcf = r.raceClassFit;
+      const classLine = cp ? `\n  Class: Current ${cp.currentRating} | Peak ${cp.peakRating} | Won up to ${cp.highestClassWon} | Optimal ${cp.optimalRangeMin}-${cp.optimalRangeMax} | Trend: ${cp.trend || 'unknown'}` : '';
+      const fitLine = rcf ? `\n  Race Fit: ${rcf.assessment} (diff: ${rcf.classDifference}, ${rcf.withinOptimalRange ? 'within optimal range' : 'outside optimal range'})` : '';
+
+      // ML prediction
+      const pred = r.prediction;
+      const mlLine = pred ? `\n  ML Model: Win ${(pred.winProb * 100).toFixed(1)}% | Place ${(pred.placeProb * 100).toFixed(1)}% | Rank ${pred.modelRank}/${enriched.fieldSize}` : '';
+
+      // Badges/decorators
+      const badges = r.decorators;
+      const badgeLine = badges && badges.length > 0
+        ? `\n  Badges: ${badges.map(b => `[${b.sentiment}] ${b.label}${b.detail ? ` (${b.detail})` : ''}`).join(', ')}`
+        : '';
+
+      // Jockey stats summary
+      const js = r.jockeyStats;
+      const jsLine = js ? `\n  Jockey Stats (90d): Win ${(js.overallWinRate || 0).toFixed(1)}% | Place ${(js.overallPlaceRate || 0).toFixed(1)}%${js.bestCondition ? ` | Best: ${js.bestCondition}` : ''}` : '';
+
+      // Trainer stats summary
+      const ts = r.trainerStats;
+      const tsLine = ts ? `\n  Trainer Stats (90d): Win ${(ts.overallWinRate || 0).toFixed(1)}% | Place ${(ts.overallPlaceRate || 0).toFixed(1)}%${ts.bestCondition ? ` | Best: ${ts.bestCondition}` : ''}` : '';
+
       return `#${r.number} ${r.name}
-  Jockey: ${r.jockey} | Trainer: ${r.trainer || 'Unknown'}
-  Weight: ${r.weight}kg (${r.weightDiff > 0 ? '+' : ''}${r.weightDiff}kg vs field avg)
-  Barrier: ${r.barrier}${r.isWideBarrier ? ' (WIDE)' : ''}
+  Jockey: ${r.jockey} | Trainer: ${r.trainer || 'Unknown'}${r.age ? ` | Age: ${r.age}` : ''}
+  Weight: ${r.weight}kg${claimStr}
+  Barrier: ${r.barrier}${r.isWideBarrier ? ' (WIDE)' : ''}${biasStr}
   Form: ${r.form || 'No form'} => ${fs.starts} starts, ${fs.wins}W/${fs.places}P, avg finish: ${fs.avgFinishPos}${fs.spells > 0 ? `, ${fs.spells} spells` : ''}${fs.fails > 0 ? `, ${fs.fails} DNF` : ''} | Last 3: ${fs.lastThree}
-  Stats: Win ${(r.stats?.winPct || 0).toFixed(0)}% | Track ${(r.stats?.trackWinPct || 0).toFixed(0)}% | Distance ${(r.stats?.distanceWinPct || 0).toFixed(0)}% | Good Track ${(r.stats?.goodTrackWinPct || 0).toFixed(0)}%
+  Stats: Win ${(r.stats?.winPct || 0).toFixed(0)}% | Track ${(r.stats?.trackWinPct || 0).toFixed(0)}% | Distance ${(r.stats?.distanceWinPct || 0).toFixed(0)}% | Good Track ${(r.stats?.goodTrackWinPct || 0).toFixed(0)}%${fuLine}${suLine}${smLine}${classLine}${fitLine}${mlLine}${badgeLine}${jsLine}${tsLine}
   Form Score: ${(r.stats?.recentFormScore || 0).toFixed(1)} (${r.recentFormDiff > 0 ? '+' : ''}${r.recentFormDiff} vs avg)${flagStr}`;
     }).join('\n\n');
 
-    const userMessage = `RACE: ${enriched.track} Race ${enriched.raceNumber}
+    // Track bias summary
+    const tb = enriched.trackBias;
+    const trackBiasLine = tb ? `TRACK BIAS: ${tb.biasStrength || 'unknown'} | Strongest: barrier ${tb.strongestBarrier || '?'} | Weakest: barrier ${tb.weakestBarrier || '?'}` : 'TRACK BIAS: No data available';
+
+    const userMessage = `RACE: ${enriched.track} Race ${enriched.raceNumber}${enriched.raceName ? ` (${enriched.raceName})` : ''}
 DISTANCE: ${enriched.distance} (${enriched.distanceCategory})
 CONDITION: ${enriched.condition} (${enriched.trackCondition.isWet ? 'WET TRACK' : 'DRY TRACK'})
 WEATHER: ${enriched.weather}
-FIELD SIZE: ${enriched.fieldSize} runners
+${enriched.raceClass ? `RACE CLASS: ${enriched.raceClass}\n` : ''}${enriched.paceScenario ? `PACE SCENARIO: ${enriched.paceScenario}\n` : ''}FIELD SIZE: ${enriched.fieldSize} runners
+${trackBiasLine}
+${enriched.mlModelConfidence ? `ML MODEL CONFIDENCE: ${enriched.mlModelConfidence}` : 'ML MODEL: No predictions available'}
 FIELD AVERAGES:
-- Weight: ${enriched.fieldAvg.weight}kg
-- Win%: ${enriched.fieldAvg.winPct}%
-- Recent Form Score: ${enriched.fieldAvg.recentFormScore}
+- Weight: ${enriched.fieldAvg.weight}kg | Win%: ${enriched.fieldAvg.winPct}% | Recent Form Score: ${enriched.fieldAvg.recentFormScore}${enriched.fieldAvg.classRating > 0 ? ` | Class Rating: ${enriched.fieldAvg.classRating}` : ''}
 
 RUNNERS:
 ${runnersText}
@@ -526,12 +842,15 @@ Analyze this race step by step using the methodology. Search X for "${enriched.t
         ? Object.entries(aiResult.analysis).map(([k, v]) => {
             const labels = {
               step1_field: 'Field Assessment',
-              step2_form: 'Form Analysis',
-              step3_conditions: 'Conditions Match',
-              step4_weight: 'Weight & Class',
-              step5_connections: 'Connections',
-              step6_intelligence: 'Real-Time Intelligence',
-              step7_edge: 'Edge Identification'
+              step2_pace: 'Pace Analysis',
+              step3_form: 'Form Analysis',
+              step4_conditions: 'Conditions Match',
+              step5_firstup: 'First-Up/Second-Up',
+              step6_class_weight: 'Class & Weight',
+              step7_connections: 'Connections',
+              step8_intelligence: 'Real-Time Intelligence',
+              step9_ml: 'ML Model Cross-Reference',
+              step10_edge: 'Edge Identification'
             };
             return `${labels[k] || k}:\n${v}`;
           }).join('\n\n')
