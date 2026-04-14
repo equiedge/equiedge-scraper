@@ -496,12 +496,13 @@ async function fetchTrackBias(track) {
     serverLog(`Track bias loaded for ${track} (bias: ${data.biasStrength || 'unknown'})`);
     return data;
   } catch (err) {
+    if (err.response && err.response.status === 404) return null;
     serverLog(`Track bias fetch failed for ${track}: ${err.message}`);
     return null;
   }
 }
 
-// Phase 2: Fetch ML predictions per race
+// Phase 2: Fetch ML predictions per race (beta — may not be available)
 async function fetchPredictions(date, track, raceNumber) {
   try {
     const url = `https://api.formfav.com/v1/predictions?date=${date}&track=${track}&race=${raceNumber}&race_code=gallops`;
@@ -510,6 +511,8 @@ async function fetchPredictions(date, track, raceNumber) {
     });
     return data;
   } catch (err) {
+    // Silently handle 404 — predictions endpoint may not be available yet
+    if (err.response && err.response.status === 404) return null;
     serverLog(`Predictions fetch failed for ${track} R${raceNumber}: ${err.message}`);
     return null;
   }
@@ -667,14 +670,17 @@ async function scrapeFormFav(tracks, raceFilter) {
       }
     }
 
-    // Phase 2: Fetch predictions for all races on this track in parallel
+    // Phase 2: Fetch predictions for all races on this track in parallel (beta)
     if (trackRaces.length > 0) {
-      serverLog(`Fetching ML predictions for ${trackRaces.length} races at ${track}...`);
       const predResults = await Promise.all(
         trackRaces.map(r => fetchPredictions(date, track, r.raceNumber))
       );
+      const predCount = predResults.filter(p => p != null).length;
       for (let i = 0; i < trackRaces.length; i++) {
         trackRaces[i].predictionsData = predResults[i] || null;
+      }
+      if (predCount > 0) {
+        serverLog(`ML predictions loaded for ${predCount}/${trackRaces.length} races at ${track}`);
       }
     }
 
