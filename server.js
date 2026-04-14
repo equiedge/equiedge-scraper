@@ -108,13 +108,13 @@ STEP 4 — CONDITIONS MATCH:
 This step is critical and should be re-weighted if Step 8 identifies a track bias.
 
 TRACK CONDITION:
-- Compare goodTrackWinPct vs overall winPct
-- If today is WET and a horse has high goodTrackWinPct but low overall winPct = dry-tracker, negative
+- Compare Condition win% vs overall Win%. A horse with high overall Win% but low Condition win% on today's going is a negative signal.
+- If today is WET and a horse has low Condition win% = likely dry-tracker, negative
 - If today is WET and a horse has proven wet form = significant positive, especially if rivals are unproven on wet ground
 - Track conditions can change throughout a meeting — use the most current condition rating available (see Step 8)
 
 DISTANCE:
-- distanceWinPct shows proven ability at this trip
+- Dist win% shows proven ability at this trip. Track+Dist win% is even more predictive — proven at this exact course and distance combination.
 - First time at a distance is a RISK FACTOR but not an automatic disqualifier:
   > Consider breeding (stamina sire stepping up in distance is less risky)
   > Consider racing pattern (a horse that closes strongly at 1400m may relish 1600m)
@@ -122,8 +122,8 @@ DISTANCE:
 - Significant distance changes (e.g., 1200m to 2000m) without any form at intermediate trips = genuine concern
 
 TRACK:
-- trackWinPct = proven at this specific course
-- Some horses are track specialists — high trackWinPct at a course is a strong positive
+- Track win% = proven at this specific course
+- Some horses are track specialists — high Track win% at a course is a strong positive
 - First time at a track is not a red flag by itself, but combined with other unknowns it adds uncertainty
 
 BARRIER & TRACK BIAS (from historical data):
@@ -252,7 +252,7 @@ These are caution signals that should significantly lower confidence. Multiple r
 - No wins or places at today's distance AND no breeding or form indicators suggesting the trip will suit
 - Carrying 3+kg above field average weight in a handicap at 1600m+ (less relevant in sprints or WFA races)
 - Wide barrier in sprint races (<1400m) UNLESS track bias data suggests outside runners are favoured
-- Very low trackWinPct or distanceWinPct (<10%) with a meaningful sample size (5+ starts)
+- Very low Track win% or Dist win% (<10%) with a meaningful sample size (5+ starts)
 - Deteriorating form across the last 4+ starts with no clear excuse (wide runs, traffic, unsuitable conditions)
 - Significant class drop (2+ levels) with no recent competitive form — the horse may be in decline rather than finding its level
 - Backing up within 7 days without a proven record of handling quick turnarounds
@@ -262,7 +262,7 @@ RED FLAG OVERRIDES (a red flag can be discounted when):
 - First-up from spell: trainer has a first-up strike rate >15% AND/OR the horse has won or placed fresh previously (check firstUp stats) — many elite Australian stables target first-up wins
 - Distance untried: breeding strongly suggests the trip will suit (e.g., proven stamina sire, dam's side stayed) AND horse has strong closing sectionals at shorter trips
 - Wide barrier: Track bias data or Step 8 identified a track bias favouring outside runners today
-- Low distanceWinPct: small sample size (<5 starts at the distance) makes the percentage unreliable
+- Low Dist win%: small sample size (<5 starts at the distance) makes the percentage unreliable
 
 CONFIDENCE CALIBRATION (updated for Pro data):
 - 60-69: Marginal edge — one clear advantage, conditions suit, no red flags
@@ -384,8 +384,8 @@ function enrichRaceData(race) {
   }
   // Field averages
   const avgWeight = fieldSize > 0 ? runners.reduce((s, r) => s + (r.weight || 0), 0) / fieldSize : 0;
-  const avgWinPct = fieldSize > 0 ? runners.reduce((s, r) => s + (r.stats?.winPct || 0), 0) / fieldSize : 0;
-  const avgFormScore = fieldSize > 0 ? runners.reduce((s, r) => s + (r.stats?.recentFormScore || 0), 0) / fieldSize : 0;
+  const avgWinPct = fieldSize > 0 ? runners.reduce((s, r) => s + (r.stats?.overall?.winPercent || 0), 0) / fieldSize : 0;
+  const avgPlacePct = fieldSize > 0 ? runners.reduce((s, r) => s + (r.stats?.overall?.placePercent || 0), 0) / fieldSize : 0;
   const avgClassRating = fieldSize > 0 ? runners.reduce((s, r) => s + (r.classProfile?.currentRating || 0), 0) / fieldSize : 0;
 
   // Track bias data
@@ -437,8 +437,8 @@ function enrichRaceData(race) {
       weightDiff: parseFloat(((r.weight || 0) - avgWeight).toFixed(1)),
       effectiveWeight: parseFloat(effectiveWeight.toFixed(1)),
       effectiveWeightDiff: parseFloat((effectiveWeight - avgWeight).toFixed(1)),
-      winPctDiff: parseFloat(((r.stats?.winPct || 0) - avgWinPct).toFixed(1)),
-      recentFormDiff: parseFloat(((r.stats?.recentFormScore || 0) - avgFormScore).toFixed(1)),
+      winPctDiff: parseFloat(((r.stats?.overall?.winPercent || 0) - avgWinPct).toFixed(1)),
+      placePctDiff: parseFloat(((r.stats?.overall?.placePercent || 0) - avgPlacePct).toFixed(1)),
       isWideBarrier: (r.barrier || 0) > fieldSize * 0.7,
       isFirstUp,
       isResuming,
@@ -462,8 +462,8 @@ function enrichRaceData(race) {
     mlModelConfidence: predictions?.confidence || null,
     fieldAvg: {
       weight: parseFloat(avgWeight.toFixed(1)),
-      winPct: parseFloat(avgWinPct.toFixed(1)),
-      recentFormScore: parseFloat(avgFormScore.toFixed(1)),
+      winPct: parseFloat((avgWinPct * 100).toFixed(1)),
+      placePct: parseFloat((avgPlacePct * 100).toFixed(1)),
       classRating: parseFloat(avgClassRating.toFixed(1)),
     }
   };
@@ -725,8 +725,8 @@ async function analyzeRaceWithGrok(race) {
       // First-up / second-up stats
       const fuStats = r.stats?.firstUp;
       const suStats = r.stats?.secondUp;
-      const fuLine = fuStats && fuStats.starts > 0 ? `\n  First-Up: ${fuStats.starts} starts, ${fuStats.wins}W (${(fuStats.winPercent || 0).toFixed(0)}% win, ${(fuStats.placePercent || 0).toFixed(0)}% place)` : '';
-      const suLine = suStats && suStats.starts > 0 ? `\n  Second-Up: ${suStats.starts} starts, ${suStats.wins}W (${(suStats.winPercent || 0).toFixed(0)}% win, ${(suStats.placePercent || 0).toFixed(0)}% place)` : '';
+      const fuLine = fuStats && fuStats.starts > 0 ? `\n  First-Up: ${fuStats.starts} starts, ${fuStats.wins}W (${((fuStats.winPercent || 0) * 100).toFixed(0)}% win, ${((fuStats.placePercent || 0) * 100).toFixed(0)}% place)` : '';
+      const suLine = suStats && suStats.starts > 0 ? `\n  Second-Up: ${suStats.starts} starts, ${suStats.wins}W (${((suStats.winPercent || 0) * 100).toFixed(0)}% win, ${((suStats.placePercent || 0) * 100).toFixed(0)}% place)` : '';
 
       // Speed map
       const sm = r.speedMap;
@@ -735,7 +735,7 @@ async function analyzeRaceWithGrok(race) {
       // Class profile
       const cp = r.classProfile;
       const rcf = r.raceClassFit;
-      const classLine = cp ? `\n  Class: Current ${cp.currentRating} | Peak ${cp.peakRating} | Won up to ${cp.highestClassWon} | Optimal ${cp.optimalRangeMin}-${cp.optimalRangeMax} | Trend: ${cp.trend || 'unknown'}` : '';
+      const classLine = cp ? `\n  Class: Current ${cp.currentRating || '?'} | Peak ${cp.peakRating || '?'}${cp.highestClassWon ? ` | Won up to ${cp.highestClassWon}` : ''}${cp.optimalRangeMin != null ? ` | Optimal ${cp.optimalRangeMin}-${cp.optimalRangeMax}` : ''} | Trend: ${cp.trend || 'unknown'}` : '';
       const fitLine = rcf ? `\n  Race Fit: ${rcf.assessment} (diff: ${rcf.classDifference}, ${rcf.withinOptimalRange ? 'within optimal range' : 'outside optimal range'})` : '';
 
       // ML prediction
@@ -750,19 +750,19 @@ async function analyzeRaceWithGrok(race) {
 
       // Jockey stats summary
       const js = r.jockeyStats;
-      const jsLine = js ? `\n  Jockey Stats (90d): Win ${(js.overallWinRate || 0).toFixed(1)}% | Place ${(js.overallPlaceRate || 0).toFixed(1)}%${js.bestCondition ? ` | Best: ${js.bestCondition}` : ''}` : '';
+      const jsLine = js ? `\n  Jockey Stats (90d): Win ${((js.recentStats?.overallWinRate || js.overallWinRate || 0) * 100).toFixed(1)}% | Place ${((js.recentStats?.overallPlaceRate || js.overallPlaceRate || 0) * 100).toFixed(1)}%${js.bestCondition ? ` | Best: ${js.bestCondition}` : ''}` : '';
 
       // Trainer stats summary
       const ts = r.trainerStats;
-      const tsLine = ts ? `\n  Trainer Stats (90d): Win ${(ts.overallWinRate || 0).toFixed(1)}% | Place ${(ts.overallPlaceRate || 0).toFixed(1)}%${ts.bestCondition ? ` | Best: ${ts.bestCondition}` : ''}` : '';
+      const tsLine = ts ? `\n  Trainer Stats (90d): Win ${((ts.recentStats?.overallWinRate || ts.overallWinRate || 0) * 100).toFixed(1)}% | Place ${((ts.recentStats?.overallPlaceRate || ts.overallPlaceRate || 0) * 100).toFixed(1)}%${ts.bestCondition ? ` | Best: ${ts.bestCondition}` : ''}` : '';
 
       return `#${r.number} ${r.name}
   Jockey: ${r.jockey} | Trainer: ${r.trainer || 'Unknown'}${r.age ? ` | Age: ${r.age}` : ''}
   Weight: ${r.weight}kg${claimStr}
   Barrier: ${r.barrier}${r.isWideBarrier ? ' (WIDE)' : ''}${biasStr}
   Form: ${r.form || 'No form'} => ${fs.starts} starts, ${fs.wins}W/${fs.places}P, avg finish: ${fs.avgFinishPos}${fs.spells > 0 ? `, ${fs.spells} spells` : ''}${fs.fails > 0 ? `, ${fs.fails} DNF` : ''} | Last 3: ${fs.lastThree}
-  Stats: Win ${(r.stats?.winPct || 0).toFixed(0)}% | Track ${(r.stats?.trackWinPct || 0).toFixed(0)}% | Distance ${(r.stats?.distanceWinPct || 0).toFixed(0)}% | Good Track ${(r.stats?.goodTrackWinPct || 0).toFixed(0)}%${fuLine}${suLine}${smLine}${classLine}${fitLine}${mlLine}${badgeLine}${jsLine}${tsLine}
-  Form Score: ${(r.stats?.recentFormScore || 0).toFixed(1)} (${r.recentFormDiff > 0 ? '+' : ''}${r.recentFormDiff} vs avg)${flagStr}`;
+  Stats: Win ${((r.stats?.overall?.winPercent || 0) * 100).toFixed(0)}% (${r.stats?.overall?.starts || 0} starts) | Track ${((r.stats?.track?.winPercent || 0) * 100).toFixed(0)}% (${r.stats?.track?.starts || 0}) | Dist ${((r.stats?.distance?.winPercent || 0) * 100).toFixed(0)}% (${r.stats?.distance?.starts || 0}) | Track+Dist ${((r.stats?.trackDistance?.winPercent || 0) * 100).toFixed(0)}% (${r.stats?.trackDistance?.starts || 0}) | Condition ${((r.stats?.condition?.winPercent || 0) * 100).toFixed(0)}% (${r.stats?.condition?.starts || 0})${fuLine}${suLine}${smLine}${classLine}${fitLine}${mlLine}${badgeLine}${jsLine}${tsLine}
+  Win% vs field: ${r.winPctDiff > 0 ? '+' : ''}${(r.winPctDiff * 100).toFixed(1)}% | Place% vs field: ${r.placePctDiff > 0 ? '+' : ''}${(r.placePctDiff * 100).toFixed(1)}%${flagStr}`;
     }).join('\n\n');
 
     // Track bias summary
@@ -777,7 +777,7 @@ ${enriched.raceClass ? `RACE CLASS: ${enriched.raceClass}\n` : ''}${enriched.pac
 ${trackBiasLine}
 ${enriched.mlModelConfidence ? `ML MODEL CONFIDENCE: ${enriched.mlModelConfidence}` : 'ML MODEL: No predictions available'}
 FIELD AVERAGES:
-- Weight: ${enriched.fieldAvg.weight}kg | Win%: ${enriched.fieldAvg.winPct}% | Recent Form Score: ${enriched.fieldAvg.recentFormScore}${enriched.fieldAvg.classRating > 0 ? ` | Class Rating: ${enriched.fieldAvg.classRating}` : ''}
+- Weight: ${enriched.fieldAvg.weight}kg | Win%: ${enriched.fieldAvg.winPct}% | Place%: ${enriched.fieldAvg.placePct}%${enriched.fieldAvg.classRating > 0 ? ` | Class Rating: ${enriched.fieldAvg.classRating}` : ''}
 
 RUNNERS:
 ${runnersText}
