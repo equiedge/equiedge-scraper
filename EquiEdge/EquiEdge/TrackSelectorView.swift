@@ -77,6 +77,7 @@ final class TrackSelection {
                 track("Gosford"),
                 track("Hawkesbury"),
                 track("Newcastle"),
+                track("Warwick Farm"),
                 track("Wyong"),
             ]),
             StateGroup(state: "Victoria", stateCode: "VIC", tracks: [
@@ -487,12 +488,18 @@ final class TrackSelection {
 struct TrackSelectorView: View {
     @Bindable var selection = TrackSelection.shared
     @State private var searchText = ""
+    @State private var activeClassification: TrackClassification? = nil
+    @State private var expandedStates: Set<String> = []
 
     private var filteredClassificationGroups: [ClassificationGroup] {
-        guard !searchText.isEmpty else {
-            return TrackSelection.allClassificationGroups
+        let base: [ClassificationGroup]
+        if let active = activeClassification {
+            base = TrackSelection.allClassificationGroups.filter { $0.classification == active }
+        } else {
+            base = TrackSelection.allClassificationGroups
         }
-        return TrackSelection.allClassificationGroups.compactMap { classGroup in
+        guard !searchText.isEmpty else { return base }
+        return base.compactMap { classGroup in
             let filteredStateGroups = classGroup.stateGroups.compactMap { stateGroup -> StateGroup? in
                 let filteredTracks = stateGroup.tracks.filter {
                     $0.name.localizedCaseInsensitiveContains(searchText)
@@ -506,73 +513,337 @@ struct TrackSelectorView: View {
     }
 
     var body: some View {
-        List {
-            ForEach(filteredClassificationGroups, id: \.classification) { classGroup in
-                classificationToggleSection(classGroup)
+        ScrollView {
+            VStack(spacing: 0) {
+                // ── Summary Bar ──
+                summaryBar
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
 
-                ForEach(classGroup.stateGroups, id: \.stateCode) { stateGroup in
-                    stateSection(stateGroup)
+                // ── Search ──
+                searchBar
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+
+                // ── Classification Chips ──
+                classificationChips
+                    .padding(.top, 14)
+
+                // ── Track Sections ──
+                LazyVStack(spacing: 12) {
+                    ForEach(filteredClassificationGroups, id: \.classification) { classGroup in
+                        classificationSection(classGroup)
+                    }
                 }
+                .padding(.horizontal, 16)
+                .padding(.top, 14)
+
+                Spacer(minLength: 100)
             }
         }
-        .searchable(text: $searchText, prompt: "Search racetracks")
+        .background(EEColors.bgPrimary)
         .navigationTitle("Racetracks")
+        .navigationBarTitleDisplayMode(.large)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    Button("Select All") { selection.selectAll() }
-                    Button("Deselect All") { selection.deselectAll() }
+                    Button { selection.selectAll() } label: {
+                        Label("Select All", systemImage: "checkmark.circle.fill")
+                    }
+                    Button { selection.deselectAll() } label: {
+                        Label("Deselect All", systemImage: "circle")
+                    }
                 } label: {
                     Image(systemName: "ellipsis.circle")
+                        .foregroundStyle(EEColors.emerald)
                 }
             }
         }
     }
 
-    @ViewBuilder
-    private func classificationToggleSection(_ classGroup: ClassificationGroup) -> some View {
-        let allOn = selection.allSelected(inClassification: classGroup)
-        Section {
-            Toggle(isOn: Binding(
-                get: { allOn },
-                set: { newValue in
-                    if newValue {
-                        selection.selectAll(inClassification: classGroup)
-                    } else {
-                        selection.deselectAll(inClassification: classGroup)
+    // MARK: - Summary Bar
+
+    private var summaryBar: some View {
+        HStack(spacing: 16) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(selection.selectedSlugs.count)")
+                    .font(.title2.weight(.heavy).monospacedDigit())
+                    .foregroundStyle(EEColors.emerald)
+                Text("Selected")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(EEColors.textMuted)
+                    .textCase(.uppercase)
+                    .tracking(0.5)
+            }
+
+            Rectangle()
+                .fill(EEColors.borderSubtle)
+                .frame(width: 1, height: 32)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(TrackSelection.totalTrackCount)")
+                    .font(.title2.weight(.heavy).monospacedDigit())
+                    .foregroundStyle(EEColors.textPrimary)
+                Text("Total")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(EEColors.textMuted)
+                    .textCase(.uppercase)
+                    .tracking(0.5)
+            }
+
+            Spacer()
+
+            // Coverage percentage
+            let pct = TrackSelection.totalTrackCount > 0
+                ? Int(Double(selection.selectedSlugs.count) / Double(TrackSelection.totalTrackCount) * 100)
+                : 0
+            Text("\(pct)%")
+                .font(.title3.weight(.heavy).monospacedDigit())
+                .foregroundStyle(EEColors.blue)
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(EEColors.bgCard)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14)
+                        .stroke(EEColors.borderSubtle, lineWidth: 1)
+                )
+        )
+    }
+
+    // MARK: - Search
+
+    private var searchBar: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(EEColors.textMuted)
+                .font(.subheadline)
+            TextField("Search racetracks...", text: $searchText)
+                .foregroundStyle(EEColors.textPrimary)
+                .font(.subheadline)
+            if !searchText.isEmpty {
+                Button { searchText = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(EEColors.textMuted)
+                }
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(EEColors.bgSecondary)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(EEColors.borderSubtle, lineWidth: 1)
+                )
+        )
+    }
+
+    // MARK: - Classification Chips
+
+    private var classificationChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { activeClassification = nil }
+                } label: {
+                    Text("All")
+                        .eeChip(isActive: activeClassification == nil)
+                }
+
+                ForEach(TrackClassification.allCases, id: \.self) { classification in
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            activeClassification = activeClassification == classification ? nil : classification
+                        }
+                    } label: {
+                        HStack(spacing: 5) {
+                            Text(classification.rawValue)
+                            let count = TrackSelection.allClassificationGroups
+                                .first { $0.classification == classification }?
+                                .allTracks
+                                .filter { selection.isSelected($0.slug) }
+                                .count ?? 0
+                            if count > 0 {
+                                Text("\(count)")
+                                    .font(.caption2.weight(.bold))
+                                    .foregroundStyle(activeClassification == classification ? EEColors.emerald : EEColors.textMuted)
+                            }
+                        }
+                        .eeChip(isActive: activeClassification == classification)
                     }
                 }
-            )) {
-                Text(classGroup.classification.rawValue)
-                    .font(.headline)
             }
+            .padding(.horizontal, 16)
         }
     }
 
+    // MARK: - Classification Section
+
     @ViewBuilder
-    private func stateSection(_ stateGroup: StateGroup) -> some View {
-        Section {
-            ForEach(stateGroup.tracks, id: \.slug) { track in
-                Toggle(track.name, isOn: Binding(
-                    get: { selection.isSelected(track.slug) },
-                    set: { _ in selection.toggle(track.slug) }
-                ))
-            }
-        } header: {
+    private func classificationSection(_ classGroup: ClassificationGroup) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            // Classification header
             HStack {
-                Text(stateGroup.state)
+                Text(classGroup.classification.rawValue)
+                    .font(.title3.weight(.heavy))
+                    .foregroundStyle(EEColors.textPrimary)
+
+                let selectedCount = classGroup.allTracks.filter { selection.isSelected($0.slug) }.count
+                EEBadge(
+                    text: "\(selectedCount)/\(classGroup.allTracks.count)",
+                    color: selectedCount > 0 ? EEColors.emerald : EEColors.textMuted,
+                    style: .subtle
+                )
+
                 Spacer()
-                let allOn = selection.allSelected(in: stateGroup)
-                Button(allOn ? "Deselect" : "Select All") {
-                    if allOn {
-                        selection.deselectAll(in: stateGroup)
+
+                let allOn = selection.allSelected(inClassification: classGroup)
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        if allOn {
+                            selection.deselectAll(inClassification: classGroup)
+                        } else {
+                            selection.selectAll(inClassification: classGroup)
+                        }
+                    }
+                } label: {
+                    Text(allOn ? "Deselect" : "Select All")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(EEColors.emerald)
+                }
+            }
+
+            // State groups
+            ForEach(classGroup.stateGroups, id: \.stateCode) { stateGroup in
+                stateGroupCard(stateGroup, classification: classGroup.classification)
+            }
+        }
+    }
+
+    // MARK: - State Group Card
+
+    @ViewBuilder
+    private func stateGroupCard(_ stateGroup: StateGroup, classification: TrackClassification) -> some View {
+        let isExpanded = expandedStates.contains(stateGroup.stateCode + classification.rawValue)
+        let selectedInGroup = stateGroup.tracks.filter { selection.isSelected($0.slug) }.count
+
+        VStack(spacing: 0) {
+            // State header (tappable to expand/collapse)
+            Button {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    let key = stateGroup.stateCode + classification.rawValue
+                    if expandedStates.contains(key) {
+                        expandedStates.remove(key)
                     } else {
-                        selection.selectAll(in: stateGroup)
+                        expandedStates.insert(key)
                     }
                 }
-                .font(.caption)
-                .textCase(nil)
+            } label: {
+                HStack {
+                    Text(stateGroup.stateCode)
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(EEColors.bgPrimary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(EEColors.emerald.opacity(0.8))
+                        )
+
+                    Text(stateGroup.state)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(EEColors.textPrimary)
+
+                    Spacer()
+
+                    Text("\(selectedInGroup)/\(stateGroup.tracks.count)")
+                        .font(.caption.weight(.medium).monospacedDigit())
+                        .foregroundStyle(selectedInGroup > 0 ? EEColors.emerald : EEColors.textMuted)
+
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(EEColors.textMuted)
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                }
+                .padding(.vertical, 12)
+                .padding(.horizontal, 14)
             }
+
+            // Expanded track list
+            if isExpanded {
+                Divider()
+                    .overlay(EEColors.borderSubtle)
+
+                // Select/deselect all for this state
+                HStack {
+                    Spacer()
+                    let allOn = selection.allSelected(in: stateGroup)
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            if allOn {
+                                selection.deselectAll(in: stateGroup)
+                            } else {
+                                selection.selectAll(in: stateGroup)
+                            }
+                        }
+                    } label: {
+                        Text(allOn ? "Deselect All" : "Select All")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(EEColors.emerald)
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.top, 8)
+
+                // Track toggles
+                VStack(spacing: 0) {
+                    ForEach(stateGroup.tracks, id: \.slug) { track in
+                        trackRow(track)
+                        if track.slug != stateGroup.tracks.last?.slug {
+                            Divider()
+                                .overlay(EEColors.borderSubtle)
+                                .padding(.leading, 44)
+                        }
+                    }
+                }
+                .padding(.bottom, 8)
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(EEColors.bgCard)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14)
+                        .stroke(EEColors.borderSubtle, lineWidth: 1)
+                )
+        )
+    }
+
+    // MARK: - Track Row
+
+    private func trackRow(_ track: TrackInfo) -> some View {
+        let isOn = selection.isSelected(track.slug)
+        return Button {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                selection.toggle(track.slug)
+            }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: isOn ? "checkmark.circle.fill" : "circle")
+                    .font(.body)
+                    .foregroundStyle(isOn ? EEColors.emerald : EEColors.textMuted)
+
+                Text(track.name)
+                    .font(.subheadline)
+                    .foregroundStyle(isOn ? EEColors.textPrimary : EEColors.textSecondary)
+
+                Spacer()
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .contentShape(Rectangle())
         }
     }
 }

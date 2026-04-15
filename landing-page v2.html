@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+<title>EquiEdge</title>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@200;300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+
+:root {
+  --bg: #0A0A0F;
+  --bg2: #12121A;
+  --card: #1A1A26;
+  --emerald: #00DC82;
+  --blue: #4A9EFF;
+  --gold: #FFB800;
+  --red: #FF4757;
+  --t1: #F0F0F5;
+  --t2: #8A8A9A;
+  --t3: #55556A;
+  --border: rgba(255,255,255,0.06);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+}
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: var(--bg);
+  color: var(--t1);
+  font-family: 'Outfit', -apple-system, sans-serif;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+}
+
+/* ═══════════════════════════════════════
+   AMBIENT BACKGROUND — layered glows
+   ═══════════════════════════════════════ */
+.bg-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+.bg-glow-1 {
+  position: absolute;
+  width: 600px; height: 600px;
+  top: -18%; left: -15%;
+  background: radial-gradient(circle, rgba(0,220,130,0.07) 0%, transparent 65%);
+  animation: drift1 12s ease-in-out infinite alternate;
+}
+.bg-glow-2 {
+  position: absolute;
+  width: 500px; height: 500px;
+  bottom: -10%; right: -20%;
+  background: radial-gradient(circle, rgba(74,158,255,0.05) 0%, transparent 65%);
+  animation: drift2 14s ease-in-out infinite alternate;
+}
+.bg-glow-3 {
+  position: absolute;
+  width: 300px; height: 300px;
+  top: 35%; left: 50%;
+  transform: translateX(-50%);
+  background: radial-gradient(circle, rgba(0,220,130,0.03) 0%, transparent 70%);
+}
+/* Subtle grid pattern */
+.bg-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.012) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.012) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(ellipse at 50% 30%, black 20%, transparent 70%);
+  -webkit-mask-image: radial-gradient(ellipse at 50% 30%, black 20%, transparent 70%);
+}
+
+@keyframes drift1 {
+  from { transform: translate(0, 0) scale(1); }
+  to { transform: translate(30px, 20px) scale(1.1); }
+}
+@keyframes drift2 {
+  from { transform: translate(0, 0) scale(1); }
+  to { transform: translate(-20px, -15px) scale(1.05); }
+}
+
+/* ═══════════════════════════════════════
+   MAIN CONTENT — scrollable area
+   ═══════════════════════════════════════ */
+.content {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 0 28px;
+  padding-top: max(60px, env(safe-area-inset-top, 60px));
+}
+
+/* ═══════════════════════════════════════
+   ICON + HERO
+   ═══════════════════════════════════════ */
+.icon-wrap {
+  position: relative;
+  margin-bottom: 24px;
+  opacity: 0;
+  animation: enterScale 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards 0.15s;
+}
+.icon-glow {
+  position: absolute;
+  width: 180px; height: 180px;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(circle, rgba(0,220,130,0.15) 0%, transparent 70%);
+  filter: blur(20px);
+  animation: pulse 4s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 0.6; transform: translate(-50%,-50%) scale(1); }
+  50% { opacity: 1; transform: translate(-50%,-50%) scale(1.15); }
+}
+
+.app-icon {
+  width: 96px; height: 96px;
+  border-radius: 22px;
+  position: relative;
+  overflow: hidden;
+  box-shadow:
+    0 12px 48px rgba(0,220,130,0.12),
+    0 4px 16px rgba(0,0,0,0.5),
+    inset 0 1px 0 rgba(255,255,255,0.08);
+}
+.app-icon .icon-bg {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(160deg, #0F0F18, #08080D);
+}
+.app-icon .icon-inner {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.app-icon .icon-ambient {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 42% 40%, rgba(0,220,130,0.1) 0%, transparent 55%);
+}
+.app-icon svg {
+  width: 78px; height: 78px;
+  position: relative; z-index: 2;
+  filter: drop-shadow(0 0 16px rgba(0,220,130,0.25));
+}
+.app-icon::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0; height: 45%;
+  background: linear-gradient(180deg, rgba(255,255,255,0.05) 0%, transparent 100%);
+  z-index: 3;
+  pointer-events: none;
+}
+
+/* ═══════════════════════════════════════
+   TYPOGRAPHY
+   ═══════════════════════════════════════ */
+.hero-title {
+  text-align: center;
+  margin-bottom: 12px;
+  opacity: 0;
+  animation: enterUp 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards 0.35s;
+}
+.hero-title .light {
+  font-size: 38px;
+  font-weight: 200;
+  letter-spacing: -0.5px;
+  color: var(--t1);
+}
+.hero-title .bold {
+  font-size: 38px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  background: linear-gradient(135deg, var(--emerald), var(--blue));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.hero-sub {
+  text-align: center;
+  font-size: 15px;
+  font-weight: 300;
+  color: var(--t2);
+  line-height: 1.65;
+  max-width: 320px;
+  margin-bottom: 32px;
+  opacity: 0;
+  animation: enterUp 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards 0.5s;
+}
+.hero-sub strong {
+  color: var(--t1);
+  font-weight: 500;
+}
+
+/* ═══════════════════════════════════════
+   FEATURE PILLS
+   ═══════════════════════════════════════ */
+.features {
+  width: 100%;
+  max-width: 380px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 28px;
+}
+
+.feat {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  position: relative;
+  overflow: hidden;
+  opacity: 0;
+  animation: enterUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.feat:nth-child(1) { animation-delay: 0.65s; }
+.feat:nth-child(2) { animation-delay: 0.75s; }
+.feat:nth-child(3) { animation-delay: 0.85s; }
+.feat:nth-child(4) { animation-delay: 0.95s; }
+
+/* Left accent bar */
+.feat::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 8px; bottom: 8px;
+  width: 3px;
+  border-radius: 2px;
+}
+.feat:nth-child(1)::before { background: var(--emerald); }
+.feat:nth-child(2)::before { background: var(--blue); }
+.feat:nth-child(3)::before { background: var(--gold); }
+.feat:nth-child(4)::before { background: var(--red); }
+
+.feat-icon {
+  width: 40px; height: 40px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 18px;
+}
+.feat:nth-child(1) .feat-icon { background: rgba(0,220,130,0.1); }
+.feat:nth-child(2) .feat-icon { background: rgba(74,158,255,0.1); }
+.feat:nth-child(3) .feat-icon { background: rgba(255,184,0,0.1); }
+.feat:nth-child(4) .feat-icon { background: rgba(255,71,87,0.1); }
+
+.feat-text { flex: 1; }
+.feat-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--t1);
+  margin-bottom: 2px;
+}
+.feat-desc {
+  font-size: 12px;
+  font-weight: 300;
+  color: var(--t2);
+  line-height: 1.4;
+}
+
+/* ═══════════════════════════════════════
+   SOCIAL PROOF
+   ═══════════════════════════════════════ */
+.proof {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  margin-bottom: 24px;
+  opacity: 0;
+  animation: enterUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards 1.05s;
+}
+.proof-stat {
+  text-align: center;
+}
+.proof-val {
+  font-size: 20px;
+  font-weight: 800;
+  font-family: 'JetBrains Mono', monospace;
+  background: linear-gradient(135deg, var(--emerald), var(--blue));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.proof-label {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--t3);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-top: 2px;
+}
+.proof-div {
+  width: 1px;
+  height: 28px;
+  background: var(--border);
+}
+
+/* ═══════════════════════════════════════
+   BOTTOM CTA SECTION — fixed
+   ═══════════════════════════════════════ */
+.bottom-cta {
+  position: relative;
+  z-index: 10;
+  width: 100%;
+  padding: 20px 28px;
+  padding-bottom: calc(20px + var(--safe-b));
+  background: linear-gradient(180deg, transparent 0%, var(--bg) 30%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  opacity: 0;
+  animation: enterUp 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards 1.2s;
+}
+
+/* Sign in with Apple — official style */
+.apple-btn {
+  width: 100%;
+  max-width: 360px;
+  height: 54px;
+  border-radius: 14px;
+  border: none;
+  background: #fff;
+  color: #000;
+  font-family: 'Outfit', -apple-system, sans-serif;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: transform 0.15s ease, opacity 0.15s ease;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.apple-btn:active {
+  transform: scale(0.97);
+  opacity: 0.85;
+}
+.apple-btn svg {
+  width: 20px;
+  height: 20px;
+  margin-top: -2px;
+}
+
+.terms {
+  font-size: 11px;
+  color: var(--t3);
+  text-align: center;
+  line-height: 1.5;
+  max-width: 300px;
+}
+.terms a {
+  color: var(--t2);
+  text-decoration: underline;
+  text-decoration-color: rgba(138,138,154,0.3);
+  text-underline-offset: 2px;
+}
+
+/* ═══════════════════════════════════════
+   ANIMATIONS
+   ═══════════════════════════════════════ */
+@keyframes enterUp {
+  from { opacity: 0; transform: translateY(24px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes enterScale {
+  from { opacity: 0; transform: scale(0.85); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+/* ═══════════════════════════════════════
+   RESPONSIVE — works on all iPhones
+   ═══════════════════════════════════════ */
+@media (max-height: 700px) {
+  .content { padding-top: 40px; }
+  .app-icon { width: 76px; height: 76px; border-radius: 18px; }
+  .app-icon svg { width: 62px; height: 62px; }
+  .icon-wrap { margin-bottom: 24px; }
+  .hero-title .light, .hero-title .bold { font-size: 32px; }
+  .hero-sub { font-size: 14px; margin-bottom: 28px; }
+  .feat { padding: 12px 16px; }
+  .features { gap: 10px; margin-bottom: 24px; }
+  .proof { margin-bottom: 20px; }
+}
+
+@media (max-height: 600px) {
+  .proof { display: none; }
+  .features { margin-bottom: 16px; }
+}
+
+/* Desktop preview frame */
+@media (min-width: 500px) {
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #050508;
+  }
+  body > .bg-layer { display: none; }
+  .phone-frame {
+    width: 393px;
+    height: 852px;
+    border-radius: 48px;
+    border: 4px solid #2A2A35;
+    overflow: hidden;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+    box-shadow:
+      0 0 0 1px rgba(255,255,255,0.04),
+      0 40px 100px rgba(0,0,0,0.6),
+      0 0 120px rgba(0,220,130,0.04);
+  }
+  .phone-frame .bg-layer { display: block; position: absolute; }
+  .phone-frame .content { flex: 1; }
+  .no-frame { display: none; }
+
+  /* Notch */
+  .phone-frame::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 50%;
+    transform: translateX(-50%);
+    width: 126px; height: 34px;
+    background: #000;
+    border-radius: 0 0 20px 20px;
+    z-index: 20;
+  }
+}
+
+@media (max-width: 499px) {
+  .phone-frame {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+}
+</style>
+</head>
+<body>
+
+<!-- Background (outside frame on mobile, inside on desktop) -->
+<div class="bg-layer no-frame">
+  <div class="bg-glow-1"></div>
+  <div class="bg-glow-2"></div>
+  <div class="bg-glow-3"></div>
+  <div class="bg-grid"></div>
+</div>
+
+<div class="phone-frame">
+  <!-- Background (inside frame on desktop) -->
+  <div class="bg-layer">
+    <div class="bg-glow-1"></div>
+    <div class="bg-glow-2"></div>
+    <div class="bg-glow-3"></div>
+    <div class="bg-grid"></div>
+  </div>
+
+  <div class="content">
+
+    <!-- APP ICON -->
+    <div class="icon-wrap">
+      <div class="icon-glow"></div>
+      <div class="app-icon">
+        <div class="icon-bg"></div>
+        <div class="icon-ambient"></div>
+        <div class="icon-inner">
+          <svg viewBox="0 0 200 200" fill="none">
+            <defs>
+              <linearGradient id="ig" x1="25" y1="12" x2="175" y2="188" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#00DC82"/><stop offset="1" stop-color="#4A9EFF"/>
+              </linearGradient>
+              <linearGradient id="igf" x1="25" y1="12" x2="175" y2="188" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#00DC82" stop-opacity=".09"/><stop offset="1" stop-color="#4A9EFF" stop-opacity=".04"/>
+              </linearGradient>
+            </defs>
+            <polygon points="100,14 178,60 178,150 100,186 22,150 22,60" fill="url(#igf)" stroke="url(#ig)" stroke-width="2.5" stroke-linejoin="round"/>
+            <line x1="100" y1="14" x2="178" y2="60" stroke="#00DC82" stroke-width="4" stroke-linecap="round"/>
+            <circle cx="100" cy="14" r="4" fill="#fff" opacity=".9"/>
+            <line x1="22" y1="150" x2="100" y2="186" stroke="#4A9EFF" stroke-width="1.8" stroke-linecap="round" opacity=".35"/>
+            <line x1="38" y1="80" x2="162" y2="80" stroke="url(#ig)" stroke-width=".6" opacity=".1"/>
+            <line x1="32" y1="130" x2="168" y2="130" stroke="url(#ig)" stroke-width=".6" opacity=".08"/>
+            <text x="100" y="118" text-anchor="middle" font-family="Outfit,sans-serif" font-size="58" font-weight="900" letter-spacing="4" fill="url(#ig)">EE</text>
+          </svg>
+        </div>
+      </div>
+    </div>
+
+    <!-- TITLE -->
+    <div class="hero-title">
+      <span class="light">Equi</span><span class="bold">Edge</span>
+    </div>
+
+    <!-- SUBTITLE -->
+    <p class="hero-sub">
+      <strong>10-step AI handicapping</strong> with sniper selectivity — only surfaces picks with a genuine, data-backed edge.
+    </p>
+
+    <!-- FEATURES -->
+    <div class="features">
+      <div class="feat">
+        <div class="feat-icon">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+            <path d="M10 2L12.5 7.5L18 8.5L14 12.5L15 18L10 15.5L5 18L6 12.5L2 8.5L7.5 7.5L10 2Z" stroke="#00DC82" stroke-width="1.5" stroke-linejoin="round" fill="rgba(0,220,130,0.15)"/>
+          </svg>
+        </div>
+        <div class="feat-text">
+          <div class="feat-title">10-Step AI Analysis</div>
+          <div class="feat-desc">Pace maps, form, class profiling, ML cross-reference and a Devil's Advocate challenge on every pick</div>
+        </div>
+      </div>
+      <div class="feat">
+        <div class="feat-icon">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+            <circle cx="10" cy="10" r="7" stroke="#4A9EFF" stroke-width="1.5" fill="rgba(74,158,255,0.1)"/>
+            <path d="M10 6V10L13 13" stroke="#4A9EFF" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <div class="feat-text">
+          <div class="feat-title">ML Model + Confidence</div>
+          <div class="feat-desc">Independent ML probability rankings fused with AI reasoning. 60–100 scores with calibrated unit sizing</div>
+        </div>
+      </div>
+      <div class="feat">
+        <div class="feat-icon">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+            <path d="M3 14L7 10L11 13L17 6" stroke="#FFB800" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <circle cx="17" cy="6" r="2" fill="rgba(255,184,0,0.3)" stroke="#FFB800" stroke-width="1"/>
+          </svg>
+        </div>
+        <div class="feat-text">
+          <div class="feat-title">Live Intelligence</div>
+          <div class="feat-desc">Real-time track bias, condition changes and late scratchings sourced live before every race</div>
+        </div>
+      </div>
+      <div class="feat">
+        <div class="feat-icon">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+            <rect x="3" y="12" width="3" height="6" rx="1" fill="rgba(255,71,87,0.3)" stroke="#FF4757" stroke-width="1"/>
+            <rect x="8.5" y="8" width="3" height="10" rx="1" fill="rgba(255,71,87,0.3)" stroke="#FF4757" stroke-width="1"/>
+            <rect x="14" y="4" width="3" height="14" rx="1" fill="rgba(255,71,87,0.3)" stroke="#FF4757" stroke-width="1"/>
+          </svg>
+        </div>
+        <div class="feat-text">
+          <div class="feat-title">P&L Performance</div>
+          <div class="feat-desc">Track every bet with live ROI, win rate, profit sparklines and streak tracking built in</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SOCIAL PROOF -->
+    <div class="proof">
+      <div class="proof-stat">
+        <div class="proof-val">3 Days</div>
+        <div class="proof-label">Free Trial</div>
+      </div>
+      <div class="proof-div"></div>
+      <div class="proof-stat">
+        <div class="proof-val">$14.99</div>
+        <div class="proof-label">/month</div>
+      </div>
+      <div class="proof-div"></div>
+      <div class="proof-stat">
+        <div class="proof-val">10-Step</div>
+        <div class="proof-label">AI Pipeline</div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- BOTTOM CTA — fixed at bottom -->
+  <div class="bottom-cta">
+    <button class="apple-btn" onclick="handleAppleSignIn()">
+      <svg viewBox="0 0 24 24" fill="currentColor">
+        <path d="M17.05 20.28c-.98.95-2.05.88-3.08.4-1.09-.5-2.08-.48-3.24 0-1.44.62-2.2.44-3.06-.4C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/>
+      </svg>
+      Sign in with Apple
+    </button>
+    <div class="terms">
+      By continuing, you agree to our <a href="#">Terms of Service</a> and <a href="#">Privacy Policy</a>
+    </div>
+  </div>
+
+</div>
+
+<script>
+function handleAppleSignIn() {
+  const btn = document.querySelector('.apple-btn');
+  btn.style.opacity = '0.6';
+  btn.textContent = 'Connecting...';
+  setTimeout(() => {
+    btn.style.opacity = '1';
+    btn.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M17.05 20.28c-.98.95-2.05.88-3.08.4-1.09-.5-2.08-.48-3.24 0-1.44.62-2.2.44-3.06-.4C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/></svg> Sign in with Apple';
+  }, 1500);
+}
+</script>
+</body>
+</html>

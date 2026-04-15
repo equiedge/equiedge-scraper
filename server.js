@@ -8,8 +8,23 @@ app.use(cors());
 app.use(express.json());
 const FORMAV_API_KEY = process.env.FORMAV_API_KEY;
 const XAI_API_KEY = process.env.XAI_API_KEY;
+const EQUIEDGE_API_KEY = process.env.EQUIEDGE_API_KEY;
 let latestRaces = [];
 let serverLogs = [];
+
+// API key authentication middleware
+function requireAuth(req, res, next) {
+  const key = req.headers['x-api-key'] || req.query.apiKey;
+  if (!EQUIEDGE_API_KEY) {
+    // If no key configured, log warning but allow (dev mode)
+    serverLog('WARNING: No EQUIEDGE_API_KEY set — endpoints are unprotected');
+    return next();
+  }
+  if (key !== EQUIEDGE_API_KEY) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+}
 function serverLog(msg) {
   const ts = new Date().toISOString().replace('T', ' ').substring(0, 23);
   const line = `${ts} [info] ${msg}`;
@@ -915,7 +930,7 @@ Analyze this race step by step using the methodology. Search X for "${enriched.t
 }
 
 // Routes
-app.all('/scrape-now', async (req, res) => {
+app.all('/scrape-now', requireAuth, async (req, res) => {
   try {
     serverLogs = [];
     const tracksParam = req.query.tracks;
@@ -962,11 +977,11 @@ app.all('/scrape-now', async (req, res) => {
   }
 });
 
-app.get('/logs', (req, res) => {
+app.get('/logs', requireAuth, (req, res) => {
   res.json(serverLogs);
 });
 
-app.get('/today-races', (req, res) => {
+app.get('/today-races', requireAuth, (req, res) => {
   res.json(latestRaces);
 });
 

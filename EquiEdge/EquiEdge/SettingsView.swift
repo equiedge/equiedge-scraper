@@ -1,129 +1,165 @@
 import SwiftUI
 
+private enum SettingsDestination: Hashable {
+    case trackSelector
+}
+
 struct SettingsView: View {
+    @Binding var navigationPath: NavigationPath
     @AppStorage("unitSize") private var unitSize: Double = 10.0
     @AppStorage("confidenceThreshold") private var confidenceThreshold: Double = 0.41
-    @AppStorage("useAI") private var useAI: Bool = true
     @StateObject private var dataService = DataService.shared
-    
-    @State private var isRefreshing = false
-    @State private var refreshMessage: String = ""
-    @State private var showRefreshConfirmation = false
-    
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("Betting Units") {
-                    VStack(alignment: .leading) {
-                        Text("Unit Amount ($)")
-                            .font(.headline)
-                        Slider(value: $unitSize, in: 5...50, step: 5)
-                        Text("$\(Int(unitSize)) per unit")
-                            .font(.title3.bold())
-                            .foregroundStyle(.green)
-                    }
-                }
-                
-                
-                Section("Data Source") {
-                    Toggle("Use AI Analysis (recommended)", isOn: $useAI)
-                    
-                    Button {
-                        showRefreshConfirmation = true
-                    } label: {
-                        HStack {
-                            if isRefreshing {
-                                ProgressView()
-                                    .scaleEffect(0.8)
-                            } else {
-                                Image(systemName: "arrow.clockwise")
-                            }
-                            Text(isRefreshing ? "Refreshing..." : "Manual Refresh Scrape")
-                        }
-                    }
-                    .disabled(isRefreshing)
-                    
-                    if !refreshMessage.isEmpty {
-                        Text(refreshMessage)
-                            .font(.caption)
-                            .foregroundStyle(refreshMessage.contains("OK") ? .green : .red)
-                    }
-                    
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text("App Logs")
-                                .font(.headline)
-                            Spacer()
-                            Button("Clear") {
-                                dataService.clearLogs()
-                            }
-                            .font(.caption)
-                        }
-                        .padding(.top, 4)
+    private var trackSelection = TrackSelection.shared
 
-                        if dataService.logs.isEmpty {
-                            Text("No logs yet")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        } else {
-                            ScrollViewReader { proxy in
-                                ScrollView {
-                                    LazyVStack(alignment: .leading, spacing: 6) {
-                                        ForEach(Array(dataService.logs.suffix(150).enumerated()), id: \.offset) { index, line in
-                                            Text(line)
-                                                .font(.caption2)
-                                                .textSelection(.enabled)
-                                                .monospaced()
-                                                .id(index)
+    init(navigationPath: Binding<NavigationPath>) {
+        self._navigationPath = navigationPath
+    }
+
+    var body: some View {
+        NavigationStack(path: $navigationPath) {
+            ZStack {
+                EEColors.bgPrimary.ignoresSafeArea()
+
+                ScrollView {
+                    VStack(spacing: 20) {
+
+                        // Betting Units
+                        VStack(alignment: .leading, spacing: 12) {
+                            EESectionHeader(title: "Betting Units")
+
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Unit Amount")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(EEColors.textPrimary)
+
+                                Slider(value: $unitSize, in: 5...50, step: 5)
+                                    .tint(EEColors.emerald)
+
+                                Text("$\(Int(unitSize)) per unit")
+                                    .font(.title3.weight(.heavy).monospacedDigit())
+                                    .foregroundStyle(EEColors.emerald)
+                            }
+                            .padding(16)
+                            .background(
+                                RoundedRectangle(cornerRadius: 14)
+                                    .fill(EEColors.bgCard)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 14)
+                                            .stroke(EEColors.borderSubtle, lineWidth: 1)
+                                    )
+                            )
+                        }
+                        .padding(.horizontal, 16)
+
+                        // Racetrack Selector
+                        VStack(alignment: .leading, spacing: 12) {
+                            EESectionHeader(title: "Racetracks")
+
+                            NavigationLink(value: SettingsDestination.trackSelector) {
+                                HStack {
+                                    Image(systemName: "mappin.and.ellipse")
+                                        .foregroundStyle(EEColors.emerald)
+                                    Text("Select Tracks")
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundStyle(EEColors.textPrimary)
+                                    Spacer()
+                                    Text("\(trackSelection.selectedSlugs.count) of \(TrackSelection.totalTrackCount)")
+                                        .font(.caption)
+                                        .foregroundStyle(EEColors.textSecondary)
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundStyle(EEColors.textMuted)
+                                }
+                                .padding(16)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 14)
+                                        .fill(EEColors.bgCard)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 14)
+                                                .stroke(EEColors.borderSubtle, lineWidth: 1)
+                                        )
+                                )
+                            }
+                        }
+                        .padding(.horizontal, 16)
+
+                        // Server Logs
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                EESectionHeader(title: "Server Logs")
+                                Spacer()
+                                Button("Clear") {
+                                    dataService.clearLogs()
+                                }
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(EEColors.textMuted)
+                            }
+
+                            VStack(alignment: .leading, spacing: 0) {
+                                if dataService.logs.isEmpty {
+                                    Text("No logs yet")
+                                        .font(.caption)
+                                        .foregroundStyle(EEColors.textMuted)
+                                        .padding(12)
+                                } else {
+                                    ScrollViewReader { proxy in
+                                        ScrollView {
+                                            LazyVStack(alignment: .leading, spacing: 4) {
+                                                ForEach(Array(dataService.logs.suffix(150).enumerated()), id: \.offset) { index, line in
+                                                    Text(line)
+                                                        .font(.caption2)
+                                                        .textSelection(.enabled)
+                                                        .monospaced()
+                                                        .foregroundStyle(EEColors.textSecondary)
+                                                        .id(index)
+                                                }
+                                            }
+                                            .padding(12)
+                                        }
+                                        .frame(minHeight: 120, maxHeight: 240)
+                                        .onChange(of: dataService.logs.count) {
+                                            if let last = dataService.logs.suffix(150).indices.last {
+                                                proxy.scrollTo(last - dataService.logs.suffix(150).startIndex, anchor: .bottom)
+                                            }
                                         }
                                     }
                                 }
-                                .frame(minHeight: 120, maxHeight: 240)
-                                .onChange(of: dataService.logs.count) {
-                                    if let last = dataService.logs.suffix(150).indices.last {
-                                        proxy.scrollTo(last - dataService.logs.suffix(150).startIndex, anchor: .bottom)
-                                    }
-                                }
                             }
+                            .background(
+                                RoundedRectangle(cornerRadius: 14)
+                                    .fill(EEColors.bgCard)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 14)
+                                            .stroke(EEColors.borderSubtle, lineWidth: 1)
+                                    )
+                            )
                         }
+                        .padding(.horizontal, 16)
+
+                        // Version
+                        Text("EquiEdge v1.0")
+                            .font(.caption)
+                            .foregroundStyle(EEColors.textMuted)
+                            .padding(.top, 8)
+
+                        Spacer().frame(height: 100)
                     }
-                }
-                
-                Section {
-                    Text("App Version 1.0")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    .padding(.top, 8)
                 }
             }
-            .navigationTitle("Settings")
-            .confirmationDialog(
-                "Refresh Race Data",
-                isPresented: $showRefreshConfirmation,
-                titleVisibility: .visible
-            ) {
-                Button("Refresh Now") {
-                    performRefresh()
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    EEBrandedTitle()
                 }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("This will trigger a new scrape from the server. Existing data for today will be replaced.")
             }
-        }
-    }
-    
-    private func performRefresh() {
-        Task {
-            isRefreshing = true
-            refreshMessage = ""
-            
-            do {
-                try await dataService.refreshScrape()
-                refreshMessage = "OK — Scrape refreshed successfully"
-            } catch {
-                refreshMessage = "Failed: \(error.localizedDescription)"
+            .navigationDestination(for: SettingsDestination.self) { destination in
+                switch destination {
+                case .trackSelector:
+                    TrackSelectorView()
+                }
             }
-            
-            isRefreshing = false
         }
     }
 }

@@ -365,10 +365,10 @@ struct RunnerDetailView: View {
             }
 
             HStack(spacing: 8) {
-                Text("W \(String(format: "%.0f", stat.winPercent))%")
+                Text("W \(String(format: "%.0f", stat.winPercent * 100))%")
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(EEColors.emerald)
-                Text("P \(String(format: "%.0f", stat.placePercent))%")
+                Text("P \(String(format: "%.0f", stat.placePercent * 100))%")
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(EEColors.blue)
             }
@@ -395,9 +395,9 @@ struct RunnerDetailView: View {
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(EEColors.textPrimary)
                         HStack(spacing: 6) {
-                            Text("W \(String(format: "%.0f", fu.winPercent))%")
+                            Text("W \(String(format: "%.0f", fu.winPercent * 100))%")
                                 .foregroundStyle(EEColors.emerald)
-                            Text("P \(String(format: "%.0f", fu.placePercent))%")
+                            Text("P \(String(format: "%.0f", fu.placePercent * 100))%")
                                 .foregroundStyle(EEColors.blue)
                         }
                         .font(.caption2.weight(.bold))
@@ -417,9 +417,9 @@ struct RunnerDetailView: View {
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(EEColors.textPrimary)
                         HStack(spacing: 6) {
-                            Text("W \(String(format: "%.0f", su.winPercent))%")
+                            Text("W \(String(format: "%.0f", su.winPercent * 100))%")
                                 .foregroundStyle(EEColors.emerald)
-                            Text("P \(String(format: "%.0f", su.placePercent))%")
+                            Text("P \(String(format: "%.0f", su.placePercent * 100))%")
                                 .foregroundStyle(EEColors.blue)
                         }
                         .font(.caption2.weight(.bold))

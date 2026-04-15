@@ -123,6 +123,36 @@ APP STORE CONNECT SETUP
   6. Create StoreKit Configuration file (.storekit) for local testing
 
 
+COMP / ADMIN ACCOUNTS
+--------------------------------------------------------------------------------
+
+  Server-side tier override — no StoreKit purchase needed.
+
+  How it works:
+    - Set tier to "pro" and subscriptionExpiresAt to null on the user record
+    - Backend returns Pro status, app enforces no limits
+    - No App Store transaction involved, purely a database flag
+
+  Use cases:
+    - Your own account (admin)
+    - Beta testers during development
+    - Influencer / promo giveaways
+    - Competition prizes
+
+  Admin endpoint (protected):
+
+    POST /api/admin/set-tier
+      - Header: Authorization: Bearer <ADMIN_SECRET> (env var on Vercel)
+      - Body: { appleUserId, tier: "pro"|"basic"|"expired", expiresAt: null|ISO }
+      - Updates user record directly
+      - Optional expiresAt for time-limited comps (e.g. 30-day free Pro)
+
+  Notes:
+    - Keep ADMIN_SECRET in Vercel env vars, never in client code
+    - Could build a simple admin web page later, but curl/Postman works for now
+    - These accounts show as Pro in-app — no visual difference to the user
+
+
 VERCEL BACKEND CHANGES
 --------------------------------------------------------------------------------
 
@@ -202,6 +232,52 @@ NEW iOS FILES TO CREATE
     - After sign-in: transitions to main app (trial auto-starts)
 
 
+EDGE AI UX FLOW (SIMPLIFIED FOR PAID MODEL)
+--------------------------------------------------------------------------------
+
+  Current behaviour (pre-subscription):
+    - User taps Edge AI -> sheet with two options:
+        "Analyse New Tracks" (only tracks without data today)
+        "Re-analyse All Tracks" (refresh all selected tracks)
+        Cancel
+    - Track selection managed in TrackSelectorView (Settings)
+
+  New behaviour (subscription model):
+    - Remove the two-option sheet
+    - User taps Edge AI -> single confirmation alert:
+        "Run Edge AI?"
+        "Run Edge AI Analysis on your selected tracks to generate
+         picks and insights."
+        [Cancel] [Run Analysis]
+    - On confirm: analyses all tracks selected in TrackSelectorView (Settings)
+    - Backend handles cache logic transparently — user doesn't need to know
+
+  Cache-aware scrape logic (server-side, invisible to user):
+    - App sends the user's selected tracks to backend
+    - Backend checks cache for each track:
+        CACHED  -> Returns stored result (no scrape, no Grok call)
+        NEW     -> Scrapes FormFav, runs Grok, stores in cache, returns result
+    - Response includes mix of cached + freshly scraped data
+    - Usage only counted for tracks not already in the user's usage log
+      (re-running same day = free, no double-counting)
+
+  Basic tier (10 track-days/week):
+    - If selected tracks would exceed the weekly limit:
+        Show alert: "You have 3/10 analyses remaining this week.
+         You've selected 8 meetings. Upgrade to Pro for unlimited access."
+        [Upgrade to Pro] [Analyse 3 Tracks]
+    - "Analyse 3 Tracks" runs analysis for only the first 3 uncounted tracks
+      (tracks already used today don't count against the limit)
+
+  Trial tier:
+    - Same logic but with 3 total track-day limit
+    - If would exceed: show paywall instead
+
+  TrackSelectorView.swift:
+    - Still used in Settings for track selection (user picks which tracks to follow)
+    - No longer part of the Edge AI prompt — selection is pre-configured
+
+
 CHANGES TO EXISTING iOS FILES
 --------------------------------------------------------------------------------
 
@@ -213,13 +289,19 @@ CHANGES TO EXISTING iOS FILES
   DataService.swift
     - In refreshScrape(), check subscription tier before sending tracks
     - Pass userId in API requests (for server-side usage tracking)
+    - Send user's selected tracks; backend returns cached + fresh results
     - After successful analysis, backend records usage automatically
     - Throw SubscriptionError.weeklyLimitReached or .trialExpired if blocked
+    - Already implemented: 1-hour-before-first-race guard skips tracks
+      whose first race is >1hr away, publishes tooEarlyTrackNames for UI alert
 
   TodayRacesView.swift
-    - Catch SubscriptionError in performAnalysis() -> present PaywallView
+    - Replace Edge AI two-option sheet with single confirmation alert
+    - New flow: tap Edge AI -> "Run Analysis?" confirmation -> analyse selected tracks
+    - Catch SubscriptionError -> present PaywallView
     - Show usage indicator for Basic users: "3/10 tracks this week"
     - Show trial indicator: "2/3 free analyses remaining (1 day left)"
+    - Basic users hitting limit: partial analysis alert with upgrade prompt
 
   SettingsView.swift
     - Add "Account" section:
@@ -231,8 +313,8 @@ CHANGES TO EXISTING iOS FILES
         Restore Purchases button
 
   TrackSelectorView.swift
-    - Soft indicator for Basic users: "10 track-day analyses/week on Basic"
-    - No hard gate here, just informational
+    - Remains in Settings for track selection (unchanged)
+    - No longer referenced from Edge AI prompt sheet (that sheet is removed)
 
 
 PAYWALL TRIGGER MATRIX
@@ -261,6 +343,156 @@ APP STORE REVIEW REQUIREMENTS
   - App must show value before paywall: race browsing, odds, runner fields
     visible to all users. Only AI analysis is gated.
   - Data collection disclosure: Apple user identifier stored server-side
+
+
+LANDING / SIGN-IN PAGE DESIGN
+--------------------------------------------------------------------------------
+
+  File: SignInView.swift (native SwiftUI recreation of landing-page v2.html)
+
+  Reference HTML: landing-page v2.html in project root
+
+  Visual design (dark theme, matches existing app):
+    - Background: #0A0A0F with animated ambient glows (emerald + blue radials)
+    - Subtle grid pattern overlay, masked to center
+    - Desktop preview wraps in a phone frame (393x852, 48px border-radius, notch)
+
+  Layout (top to bottom):
+    1. App Icon
+       - 96x96px, rounded 22px corners
+       - Dark gradient background (#0F0F18 -> #08080D)
+       - "EE" logo in emerald-to-blue gradient (hexagon + text)
+       - Glow halo behind icon (pulsing animation)
+
+    2. Title
+       - "Equi" in light weight (200) + "Edge" in bold gradient (emerald->blue)
+       - 38px Outfit font
+
+    3. Subtitle
+       - "10-step AI handicapping with sniper selectivity — only surfaces
+         picks with a genuine, data-backed edge."
+       - 15px, light grey (#8A8A9A), 300 weight
+       - "10-step AI handicapping" is bold (500 weight, --t1 colour)
+
+    4. Feature Pills (4 cards, staggered entrance animation)
+       - Card 1 (emerald accent): "10-Step AI Analysis"
+         "Pace maps, form, class profiling, ML cross-reference and a
+         Devil's Advocate challenge on every pick"
+       - Card 2 (blue accent): "ML Model + Confidence"
+         "Independent ML probability rankings fused with AI reasoning.
+         60-100 scores with calibrated unit sizing"
+       - Card 3 (gold accent): "Live Intelligence"
+         "Real-time track bias, condition changes and late scratchings
+         sourced live before every race"
+       - Card 4 (red accent, --red: #FF4757): "P&L Performance"
+         "Track every bet with live ROI, win rate, profit sparklines
+         and streak tracking built in"
+       - Each card: dark bg (#1A1A26), left colour accent bar, icon, title + desc
+
+    5. Social Proof Stats (horizontal row)
+       - "3 Days" / Free Trial
+       - "$14.99" / /month
+       - "10-Step" / AI Pipeline
+       - Values in gradient text (JetBrains Mono), labels in uppercase grey
+
+    6. Bottom CTA (pinned to bottom with safe area padding)
+       - Sign in with Apple button (white, 54px height, 14px radius)
+       - Terms text: "By continuing, you agree to our Terms of Service
+         and Privacy Policy" with tappable links
+
+  Animations:
+    - Icon: scale entrance (0.85 -> 1.0), 0.15s delay
+    - Title: slide up, 0.35s delay
+    - Subtitle: slide up, 0.5s delay
+    - Feature cards: slide up, staggered 0.65s / 0.75s / 0.85s / 0.95s
+    - Social proof: slide up, 1.05s
+    - CTA: slide up, 1.2s
+    - Icon glow: 4s pulse loop (scale 1.0 <-> 1.15)
+    - Background glows: 12-14s drift loops
+
+  Colour tokens (match Theme.swift):
+    --bg:      #0A0A0F
+    --bg2:     #12121A
+    --card:    #1A1A26
+    --emerald: #00DC82
+    --blue:    #4A9EFF
+    --gold:    #FFB800
+    --red:     #FF4757
+    --t1:      #F0F0F5  (primary text)
+    --t2:      #8A8A9A  (secondary text)
+    --t3:      #55556A  (tertiary text)
+    --border:  rgba(255,255,255,0.06)
+
+
+CODE REVIEW NOTES — MIGRATION CONSIDERATIONS
+--------------------------------------------------------------------------------
+
+  1. forceFullScrape parameter removal
+     - DataService.refreshScrape() currently takes forceFullScrape: Bool
+       which controls whether to skip locally cached tracks
+     - With server-side caching, the backend decides what's cached vs fresh
+     - The simplified Edge AI UX (single "Run Analysis" button) removes the
+       two-option modal, so this param is no longer needed
+     - Remove forceFullScrape param; always send selected tracks, let backend
+       handle cache hits vs misses
+
+  2. Dual cache layers (both still needed)
+     - Server-side cache (Vercel KV): deduplicates scrapes across ALL users,
+       ensures consistent AI picks. Keyed by "track_date".
+     - Local cache (device filesystem): stores race data for offline browsing
+       and historical date navigation. mergeCacheData() logic stays as-is.
+     - No conflict — server cache is cross-user, local cache is per-device.
+
+  3. AnalysisService runs on-device — NOT gated
+     - processRaceData() runs AnalysisService.shared.analyze() locally to
+       compute BetSuggestions from raw race data
+     - This is separate from the Grok AI analysis (server-side)
+     - Decision: leave ungated. Local analysis adds no server cost and runs
+       on cached data. Only the server-side Grok AI scrape is subscription-gated.
+
+  4. TAB API calls — NOT gated
+     - fetchTABOdds(), fetchRaceResults(), fetchTABSchedule() hit TAB
+       directly from the user's device (AU geo-bypass)
+     - These are free, no server cost, and support browsing/odds/results
+     - Keep ungated for all tiers including expired users
+
+  5. My Bets + Performance — NOT gated
+     - MyBetsView and PerformanceView use SwiftData @Query on BetRecord
+     - Fully local, no server involvement
+     - Always accessible regardless of subscription tier
+     - Users can view bet history, P&L, and performance stats even when expired
+
+  6. Server Logs section — hide for public release
+     - SettingsView currently shows "Server Logs" with live scrape output
+     - For App Store release, hide this from regular users
+     - Options: remove entirely, or gate behind a hidden debug gesture
+       (e.g. tap version label 7 times)
+
+  7. TrackSelection uses UserDefaults — stays local
+     - TrackSelection.selectedSlugs stored in UserDefaults (device-local)
+     - For subscription model, selected tracks are sent with each API request
+       so the backend can validate usage counts
+     - No need to sync track selection to the server
+
+  8. 1-hour-before-first-race guard (already implemented)
+     - DataService.refreshScrape() checks TAB schedule for each track's
+       earliest race start time
+     - Tracks whose first race is more than 1 hour away are excluded from
+       the scrape and not sent to the server
+     - A popup alerts the user: "[Track Names] not analysed. AI Analysis is
+       available 1 hour before the first race to ensure up-to-date data
+       is utilised."
+     - If some tracks are eligible and others are too early, the eligible
+       tracks are still analysed and the popup shows for the skipped ones
+     - TABScheduleResult includes firstRaceTime: [String: Date] for this check
+     - DataService publishes tooEarlyTrackNames: [String] consumed by
+       TodayRacesView to show the alert
+
+  9. File rename: GrokSelectionsView.swift -> AISelectionsView.swift
+     - File is still named GrokSelectionsView.swift but the struct inside
+       is AISelectionsView
+     - Rename file to match struct before release for consistency
+     - Also update any Xcode project references
 
 
 IMPLEMENTATION ORDER
