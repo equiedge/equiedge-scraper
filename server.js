@@ -565,7 +565,7 @@ async function fetchConnectionStats(races) {
     }
   }
   serverLog(`Fetching stats for ${jockeys.size} jockeys, ${trainers.size} trainers...`);
-  const BATCH = 5;
+  const BATCH = 10;
   const allNames = [...[...jockeys].map(n => ({ type: 'jockey', name: n })), ...[...trainers].map(n => ({ type: 'trainer', name: n }))];
   for (let i = 0; i < allNames.length; i += BATCH) {
     const batch = allNames.slice(i, i + BATCH);
@@ -609,9 +609,6 @@ async function scrapeFormFav(tracks, raceFilter) {
   let skippedPast = 0;
 
   for (const track of tracks) {
-    // Phase 2: Fetch track bias data (one call per track, cached)
-    const trackBias = await fetchTrackBias(track);
-
     const allowedRaces = raceFilter ? (raceFilter[track] || []) : null;
     const trackRaces = [];
 
@@ -637,7 +634,7 @@ async function scrapeFormFav(tracks, raceFilter) {
           raceName: data.raceName || null,
           startTime: data.startTime || null,
           numberOfRunners: data.numberOfRunners || 0,
-          trackBiasData: trackBias || null,
+          trackBiasData: null, // filled below after races loaded
           predictionsData: null, // filled below
           runners: data.runners
             .filter(r => !r.scratched) // Filter scratched runners
@@ -667,6 +664,16 @@ async function scrapeFormFav(tracks, raceFilter) {
         trackRaces.push(race);
         allRaces.push(race);
         serverLog(`Loaded ${track} R${raceNum} (${race.runners.length} runners${data.paceScenario ? `, pace: ${data.paceScenario}` : ''})`);
+      }
+    }
+
+    // Phase 2: Fetch track bias data only if we have races for this track
+    if (trackRaces.length > 0) {
+      const trackBias = await fetchTrackBias(track);
+      if (trackBias) {
+        for (const r of trackRaces) {
+          r.trackBiasData = trackBias;
+        }
       }
     }
 
