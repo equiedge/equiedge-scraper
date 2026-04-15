@@ -658,7 +658,15 @@ async function scrapeFormFav(tracks, raceFilter) {
               decorators: r.decorators || null,
               speedMap: r.speedMap || null,
               classProfile: r.classProfile || null,
-              raceClassFit: r.raceClassFit || null,
+              raceClassFit: (() => {
+                const rcf = r.raceClassFit;
+                if (!rcf) return null;
+                // Compute classDifference from classProfile if API returns 0
+                if (rcf.classDifference === 0 && r.classProfile && r.classProfile.currentRating && rcf.raceClassRating) {
+                  rcf.classDifference = r.classProfile.currentRating - rcf.raceClassRating;
+                }
+                return rcf;
+              })(),
             }))
         };
         trackRaces.push(race);
