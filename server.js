@@ -962,7 +962,9 @@ app.all('/scrape-now', requireAuth, async (req, res) => {
     } else {
       races.forEach(r => { r.suggestions = []; r.aiAnalysis = ""; });
     }
-    latestRaces = races;
+    // Accumulate races across per-track scrape calls (remove old races from same tracks)
+    const incomingTracks = new Set(races.map(r => r.track));
+    latestRaces = latestRaces.filter(r => !incomingTracks.has(r.track)).concat(races);
     res.json({
       status: "ok",
       races: races.length,

@@ -97,10 +97,7 @@ final class DataService: ObservableObject {
     @AppStorage("unitSize") private var unitSize: Double = 10.0
     
     private let baseURL = "https://equiedge-scraper.vercel.app"
-    private let apiKey: String = {
-        // Read from Info.plist or fallback to hardcoded key
-        Bundle.main.object(forInfoDictionaryKey: "EQUIEDGE_API_KEY") as? String ?? ""
-    }()
+    private let apiKey = "5124f85d92848429daf86ec20c26a201097d110047a04e71f5021e5103841944"
 
     private var session: URLSession {
         let config = URLSessionConfiguration.default
@@ -336,51 +333,55 @@ final class DataService: ObservableObject {
             log("TAB schedule unavailable — proceeding with full scrape (no race filter)")
         }
 
-        let tracksParam = allowedTracks.sorted().joined(separator: ",")
-        var urlString = "\(baseURL)/scrape-now?ai=true&tracks=\(tracksParam)"
-        if let filter = raceFilterParam {
-            urlString += "&raceFilter=\(filter.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? filter)"
-            log("Race filter: \(filter)")
-        }
-        guard let url = URL(string: urlString) else {
-            log("ERROR: Invalid scrape URL")
-            throw URLError(.badURL)
-        }
-        
-        // Start polling server logs while scrape runs
+        // Scrape each track individually to avoid Vercel timeout
+        let sortedTracks = allowedTracks.sorted()
+        let trackFilters: [String: [Int]] = schedule.futureRaces.filter { allowedTracks.contains($0.key) }
+
+        // Start polling server logs while scrapes run
         startLogPolling()
-        
         defer { stopLogPolling() }
-        
-        do {
-            let request = authenticatedRequest(url: url)
-            let (data, response) = try await session.data(for: request)
 
-            // One final log fetch to get everything
-            await fetchServerLogs()
+        var failedTracks: [String] = []
 
-            guard let httpResponse = response as? HTTPURLResponse else {
-                log("ERROR: Non-HTTP response")
-                throw URLError(.badServerResponse)
+        for (index, track) in sortedTracks.enumerated() {
+            let trackName = track.replacingOccurrences(of: "-", with: " ").capitalized
+            log("[\(index + 1)/\(sortedTracks.count)] Analysing \(trackName)…")
+
+            var urlString = "\(baseURL)/scrape-now?ai=true&tracks=\(track)"
+            if let filter = buildRaceFilterParam(from: trackFilters.filter { $0.key == track }) {
+                urlString += "&raceFilter=\(filter.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? filter)"
             }
+            guard let url = URL(string: urlString) else { continue }
 
-            if httpResponse.statusCode == 200 {
-                log("Analysis complete. Loading races…")
-                selectedDate = Self.startOfToday
-                try? await loadTodayRaces()
-                log("Done — \(races.count) races with picks, \(allRaces.count) total")
-            } else {
-                log("ERROR: Server returned \(httpResponse.statusCode)")
-                if let body = String(data: data, encoding: .utf8) {
-                    log(body)
+            do {
+                let request = authenticatedRequest(url: url)
+                let (data, response) = try await session.data(for: request)
+                await fetchServerLogs()
+
+                if let http = response as? HTTPURLResponse, http.statusCode == 200 {
+                    log("[\(index + 1)/\(sortedTracks.count)] \(trackName) complete")
+                } else {
+                    let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+                    log("ERROR: \(trackName) returned \(code)")
+                    if let body = String(data: data, encoding: .utf8) { log(body) }
+                    failedTracks.append(trackName)
                 }
-                throw URLError(.init(rawValue: httpResponse.statusCode))
+            } catch {
+                await fetchServerLogs()
+                log("ERROR: \(trackName) — \(error.localizedDescription)")
+                failedTracks.append(trackName)
             }
-        } catch {
-            await fetchServerLogs()
-            log("ERROR: \(error.localizedDescription)")
-            throw error
         }
+
+        // Load combined results once all tracks are done
+        log("Loading races…")
+        selectedDate = Self.startOfToday
+        try? await loadTodayRaces()
+
+        if !failedTracks.isEmpty {
+            log("WARNING: \(failedTracks.count) track(s) failed: \(failedTracks.joined(separator: ", "))")
+        }
+        log("Done — \(races.count) races with picks, \(allRaces.count) total")
     }
     
     @MainActor
