@@ -985,7 +985,6 @@ app.all('/warm-stats', requireAuth, async (req, res) => {
 
 app.all('/scrape-now', requireAuth, async (req, res) => {
   try {
-    serverLogs = [];
     const tracksParam = req.query.tracks;
     if (!tracksParam || tracksParam.trim() === '') {
       serverLog('No racetracks have been selected to analyse');
@@ -1018,13 +1017,15 @@ app.all('/scrape-now', requireAuth, async (req, res) => {
     // Accumulate races across per-track scrape calls (remove old races from same tracks)
     const incomingTracks = new Set(races.map(r => r.track));
     latestRaces = latestRaces.filter(r => !incomingTracks.has(r.track)).concat(races);
+    // Return full race data so iOS can cache per-track without relying on /today-races
     res.json({
       status: "ok",
       races: races.length,
       picks: races.filter(r => r.suggestions && r.suggestions.length > 0).length,
       passes: races.filter(r => !r.suggestions || r.suggestions.length === 0).length,
       date: new Date().toISOString().split('T')[0],
-      source: req.query.ai === 'true' ? "Grok AI + FormFav" : "FormFav"
+      source: req.query.ai === 'true' ? "Grok AI + FormFav" : "FormFav",
+      raceData: races
     });
   } catch (err) {
     serverLog(`Scrape error: ${err.message}`);

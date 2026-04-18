@@ -191,6 +191,27 @@ final class DataService: ObservableObject {
         return (try? encoder.encode(merged)) ?? new
     }
 
+    /// Extracts the raceData array from a /scrape-now response and merges it into the local cache
+    private func cacheRaceDataFromScrapeResponse(_ responseData: Data) {
+        // The response is { status, races, picks, ..., raceData: [...] }
+        struct ScrapeResponse: Decodable {
+            let raceData: [Race]?
+        }
+        let decoder = Self.makeDecoder()
+        guard let parsed = try? decoder.decode(ScrapeResponse.self, from: responseData),
+              let races = parsed.raceData, !races.isEmpty else {
+            return
+        }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let raceJSON = try? encoder.encode(races) else { return }
+
+        let existing = loadFromCache(for: Self.startOfToday)
+        let merged = mergeCacheData(existing: existing, new: raceJSON)
+        saveToCache(merged, for: Self.startOfToday)
+        log("Cached \(races.count) races locally")
+    }
+
     init() {}
 
     // MARK: - Date Navigation
@@ -393,6 +414,9 @@ final class DataService: ObservableObject {
 
                 if let http = response as? HTTPURLResponse, http.statusCode == 200 {
                     log("[\(index + 1)/\(sortedTracks.count)] \(trackName) complete")
+                    // Cache this track's race data immediately from the response
+                    // so we don't rely on Vercel in-memory latestRaces surviving across calls
+                    cacheRaceDataFromScrapeResponse(data)
                 } else {
                     let code = (response as? HTTPURLResponse)?.statusCode ?? -1
                     log("ERROR: \(trackName) returned \(code)")
@@ -406,10 +430,11 @@ final class DataService: ObservableObject {
             }
         }
 
-        // Load combined results once all tracks are done
+        // Load from local cache (which now has all tracks accumulated per-scrape)
         log("Loading races…")
         selectedDate = Self.startOfToday
-        try? await loadTodayRaces()
+        loadRacesForSelectedDate()
+        await fetchTABOdds(for: self.races)
 
         if !failedTracks.isEmpty {
             log("WARNING: \(failedTracks.count) track(s) failed: \(failedTracks.joined(separator: ", "))")
