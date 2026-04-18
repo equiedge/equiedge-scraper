@@ -293,10 +293,21 @@ final class DataService: ObservableObject {
         log("Checking TAB schedule for upcoming races…")
         let schedule = await fetchTABSchedule(for: tracksToScrape)
 
+        // Only scrape tracks that TAB confirmed have races today
+        var allowedTracks: Set<String>
+        if schedule.succeeded {
+            allowedTracks = Set(schedule.futureRaces.keys)
+            let noRaceTracks = tracksToScrape.subtracting(allowedTracks)
+            if !noRaceTracks.isEmpty {
+                log("No races found for: \(noRaceTracks.sorted().joined(separator: ", "))")
+            }
+        } else {
+            allowedTracks = tracksToScrape
+        }
+
         // Filter out tracks whose first race is more than 1 hour away
         let oneHourFromNow = Date().addingTimeInterval(60 * 60)
         var tooEarlySlugs: [String] = []
-        var allowedTracks = tracksToScrape
         if schedule.succeeded {
             for (slug, firstTime) in schedule.firstRaceTime {
                 if firstTime > oneHourFromNow {
@@ -311,7 +322,6 @@ final class DataService: ObservableObject {
                 tooEarlyTrackNames = names
                 log("Skipping \(names.count) tracks (first race >1hr away): \(names.joined(separator: ", "))")
                 if allowedTracks.isEmpty {
-                    // All tracks too early — nothing to scrape
                     selectedDate = Self.startOfToday
                     loadRacesForSelectedDate()
                     return
@@ -340,6 +350,29 @@ final class DataService: ObservableObject {
         // Start polling server logs while scrapes run
         startLogPolling()
         defer { stopLogPolling() }
+
+        // Pre-warm jockey/trainer stats cache on the server so scrape-now calls stay within 300s
+        let allTracksParam = sortedTracks.joined(separator: ",")
+        var warmURL = "\(baseURL)/warm-stats?tracks=\(allTracksParam)"
+        if let filter = buildRaceFilterParam(from: trackFilters) {
+            warmURL += "&raceFilter=\(filter.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? filter)"
+        }
+        if let url = URL(string: warmURL) {
+            log("Pre-warming jockey/trainer stats…")
+            do {
+                let request = authenticatedRequest(url: url)
+                let (_, response) = try await session.data(for: request)
+                await fetchServerLogs()
+                if let http = response as? HTTPURLResponse, http.statusCode == 200 {
+                    log("Stats cache warmed")
+                } else {
+                    log("Stats warm-up returned non-200 — proceeding anyway")
+                }
+            } catch {
+                await fetchServerLogs()
+                log("Stats warm-up failed — proceeding anyway")
+            }
+        }
 
         var failedTracks: [String] = []
 
@@ -436,8 +469,8 @@ final class DataService: ObservableObject {
     /// Fetch live TAB fixed win odds for the current races (today only)
     @MainActor
     func fetchLiveOdds() async {
-        guard isShowingToday, !races.isEmpty else { return }
-        await fetchTABOdds(for: self.races)
+        guard isShowingToday, !allRaces.isEmpty else { return }
+        await fetchTABOdds(for: self.allRaces)
         // Force UI refresh since fixedWinOdds is set on existing objects
         objectWillChange.send()
     }
@@ -516,7 +549,7 @@ final class DataService: ObservableObject {
                     }
 
                     // Also set raceStartTime on any already-loaded Race objects
-                    if let existing = self.races.first(where: { $0.track.lowercased().replacingOccurrences(of: " ", with: "-") == trackSlug && $0.raceNumber == raceNum }) {
+                    if let existing = self.allRaces.first(where: { $0.track.lowercased().replacingOccurrences(of: " ", with: "-") == trackSlug && $0.raceNumber == raceNum }) {
                         existing.raceStartTime = startTime
                     }
 

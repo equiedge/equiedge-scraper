@@ -8,12 +8,14 @@ private enum RacesDestination: Hashable {
 struct TodayRacesView: View {
     @Binding var navigationPath: NavigationPath
     @StateObject private var dataService = DataService.shared
-    @State private var selectedTrack: String = "All"
+    @AppStorage("selectedTrackFilter") private var selectedTrack: String = "All"
     @State private var showAnalysisModal = false
     @State private var progressTimer: Task<Void, Never>?
     @State private var showCompletedRaces = true
     @State private var showNoRacesAlert = false
     @State private var showTooEarlyAlert = false
+    @AppStorage("showSelectionsOnly") private var showSelectionsOnly = false
+    @Environment(\.scenePhase) private var scenePhase
 
     private var isAnalysing: Bool { dataService.isAnalysing }
 
@@ -22,7 +24,7 @@ struct TodayRacesView: View {
         guard !dataService.cachedTrackSlugs(for: DataService.startOfToday).isEmpty else { return false }
         // If we have race times, check if any races are still upcoming
         let now = Date()
-        let hasUpcoming = dataService.races.contains { race in
+        let hasUpcoming = dataService.allRaces.contains { race in
             guard let start = race.raceStartTime else { return true } // no time = assume upcoming
             return start > now
         }
@@ -39,29 +41,28 @@ struct TodayRacesView: View {
     }
 
     private var trackNames: [String] {
-        let tracks = Set(dataService.races.map(\.track)).sorted()
+        let tracks = Set(dataService.allRaces.map(\.track)).sorted()
         return ["All"] + tracks
     }
 
     private func sortedRaces(_ races: [Race]) -> [Race] {
         races.sorted {
-            // If both have start times, sort chronologically
             if let t0 = $0.raceStartTime, let t1 = $1.raceStartTime {
-                return t0 < t1
+                if t0 != t1 { return t0 < t1 }
             }
-            // Races with times come first
             if $0.raceStartTime != nil && $1.raceStartTime == nil { return true }
             if $0.raceStartTime == nil && $1.raceStartTime != nil { return false }
-            // Fallback: sort by track then race number
-            if $0.track == $1.track {
-                return $0.raceNumber < $1.raceNumber
-            }
+            if $0.track == $1.track { return $0.raceNumber < $1.raceNumber }
             return $0.track < $1.track
         }
     }
 
     private var allFilteredRaces: [Race] {
-        let base = selectedTrack == "All" ? dataService.races : dataService.races.filter { $0.track == selectedTrack }
+        var base = selectedTrack == "All" ? dataService.allRaces : dataService.allRaces.filter { $0.track == selectedTrack }
+        if showSelectionsOnly {
+            let sugMap = dataService.suggestionsByRaceID
+            base = base.filter { !(sugMap[String(describing: $0.id)]?.isEmpty ?? true) }
+        }
         return sortedRaces(base)
     }
 
@@ -199,9 +200,17 @@ struct TodayRacesView: View {
                 }
             }
         }
-        .onChange(of: dataService.races) {
+        .onChange(of: dataService.allRaces) {
             if !trackNames.contains(selectedTrack) {
                 selectedTrack = "All"
+            }
+        }
+        .onChange(of: scenePhase) {
+            if scenePhase == .active && !Calendar.current.isDateInToday(dataService.selectedDate) {
+                dataService.goToToday()
+                Task {
+                    await dataService.fetchLiveOdds()
+                }
             }
         }
     }
@@ -463,23 +472,24 @@ struct TodayRacesView: View {
     // MARK: - Analysis Action
 
     private func performAnalysis(fullRefresh: Bool) {
+        guard !dataService.isAnalysing else { return }
+        dataService.isAnalysing = true
+        dataService.analysisProgressMessage = ""
+        dataService.tooEarlyTrackNames = []
         Task {
-            dataService.isAnalysing = true
-            dataService.analysisProgressMessage = ""
-            dataService.tooEarlyTrackNames = []
             startProgressSimulation()
 
             do {
                 try await dataService.refreshScrape(forceFullScrape: fullRefresh)
 
-                if dataService.races.isEmpty {
+                if dataService.allRaces.isEmpty {
                     completeProgress()
                     dataService.analysisProgressMessage = "No races available"
                     dataService.isAnalysing = false
                     showNoRacesAlert = true
                 } else {
                     completeProgress()
-                    dataService.analysisProgressMessage = "\(dataService.races.count) races analysed"
+                    dataService.analysisProgressMessage = "\(dataService.allRaces.count) races analysed"
                     dataService.isAnalysing = false
                     await dataService.fetchLiveOdds()
                 }
@@ -502,7 +512,7 @@ struct TodayRacesView: View {
 
     @ViewBuilder
     private var mainContent: some View {
-        if dataService.races.isEmpty && !dataService.isLoading && !isAnalysing {
+        if dataService.allRaces.isEmpty && !dataService.isLoading && !isAnalysing {
             // Empty state with prominent analysis button
             VStack(spacing: 20) {
                 Image(systemName: "brain.head.profile")
@@ -539,10 +549,24 @@ struct TodayRacesView: View {
             ScrollView {
                 VStack(spacing: 12) {
 
-                    // Track filter chips
-                    if trackNames.count > 2 {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 8) {
+                    // Filter chips
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            // Selections only toggle
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    showSelectionsOnly.toggle()
+                                }
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: showSelectionsOnly ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                                        .font(.caption2)
+                                    Text("Picks Only")
+                                }
+                                .eeChip(isActive: showSelectionsOnly)
+                            }
+
+                            if trackNames.count > 2 {
                                 ForEach(trackNames, id: \.self) { track in
                                     Button {
                                         withAnimation(.easeInOut(duration: 0.2)) {
@@ -554,10 +578,10 @@ struct TodayRacesView: View {
                                     }
                                 }
                             }
-                            .padding(.horizontal, 16)
                         }
-                        .padding(.bottom, 4)
+                        .padding(.horizontal, 16)
                     }
+                    .padding(.bottom, 4)
 
                     // Upcoming race cards
                     LazyVStack(spacing: 10) {
@@ -693,13 +717,15 @@ struct RaceRowCard: View {
         return formatter.string(from: time)
     }
 
+    private var hasPick: Bool { topPick != nil }
+
     var body: some View {
         HStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: hasPick ? 6 : 4) {
                 HStack(spacing: 8) {
                     Text("\(race.track) R\(race.raceNumber)")
-                        .font(.headline.weight(.bold))
-                        .foregroundStyle(EEColors.textPrimary)
+                        .font(hasPick ? .headline.weight(.bold) : .subheadline.weight(.bold))
+                        .foregroundStyle(hasPick ? EEColors.textPrimary : EEColors.textSecondary)
 
                     if let time = raceTimeText {
                         Text(time)
@@ -720,31 +746,38 @@ struct RaceRowCard: View {
                     Text("•")
                     Text("\(race.runners.count) runners")
                 }
-                .font(.caption)
-                .foregroundStyle(EEColors.textSecondary)
+                .font(.caption2)
+                .foregroundStyle(EEColors.textMuted)
 
-                // Pace scenario indicator
-                if let pace = race.paceScenario {
-                    HStack(spacing: 4) {
-                        Circle()
-                            .fill(paceColor(pace))
-                            .frame(width: 6, height: 6)
-                        Text(pace.replacingOccurrences(of: "_", with: " "))
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(paceColor(pace))
-                    }
-                }
-
-                if let pick = topPick {
-                    HStack(spacing: 6) {
-                        let runner = race.runners.first { $0.name == pick.horseName }
-                        EEBadge(text: "#\(runner?.number ?? 0) \(pick.horseName)", color: EEColors.emerald)
-
-                        if let odds = pick.fixedWinOdds {
-                            EEBadge(text: "$\(String(format: "%.2f", odds))", color: EEColors.blue)
+                if hasPick {
+                    // Pace scenario indicator
+                    if let pace = race.paceScenario {
+                        HStack(spacing: 4) {
+                            Circle()
+                                .fill(paceColor(pace))
+                                .frame(width: 6, height: 6)
+                            Text(pace.replacingOccurrences(of: "_", with: " "))
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(paceColor(pace))
                         }
                     }
-                    .padding(.top, 2)
+
+                    if let pick = topPick {
+                        HStack(spacing: 6) {
+                            let runner = race.runners.first { $0.name == pick.horseName }
+                            EEBadge(text: "#\(runner?.number ?? 0) \(pick.horseName)", color: EEColors.emerald)
+
+                            if let odds = pick.fixedWinOdds {
+                                EEBadge(text: "$\(String(format: "%.2f", odds))", color: EEColors.blue)
+                            }
+                        }
+                        .padding(.top, 2)
+                    }
+                } else {
+                    Text("No Selection — no clear edge")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(EEColors.textMuted)
+                        .italic()
                 }
             }
 
@@ -765,21 +798,21 @@ struct RaceRowCard: View {
             }
 
             Image(systemName: "chevron.right")
-                .font(.caption.weight(.semibold))
+                .font(.caption2.weight(.semibold))
                 .foregroundStyle(EEColors.textMuted)
         }
-        .padding(.vertical, 14)
+        .padding(.vertical, hasPick ? 14 : 10)
         .padding(.horizontal, 16)
         .background(
-            RoundedRectangle(cornerRadius: 16)
+            RoundedRectangle(cornerRadius: hasPick ? 16 : 12)
                 .fill(EEColors.bgCard)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 16)
-                        .stroke(hasHighConfidence ? EEColors.emerald.opacity(0.2) : EEColors.borderSubtle, lineWidth: 1)
+                    RoundedRectangle(cornerRadius: hasPick ? 16 : 12)
+                        .stroke(hasPick ? EEColors.emerald.opacity(0.35) : EEColors.borderSubtle, lineWidth: hasPick ? 1.5 : 1)
                 )
         )
         .overlay(alignment: .leading) {
-            if hasHighConfidence {
+            if hasPick {
                 RoundedRectangle(cornerRadius: 2)
                     .fill(EEColors.emerald)
                     .frame(width: 3)

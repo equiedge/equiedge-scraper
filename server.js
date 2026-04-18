@@ -643,10 +643,10 @@ async function scrapeFormFav(tracks, raceFilter) {
     serverLog(`Race filter active: ${totalRaces} future races across ${Object.keys(raceFilter).length} tracks`);
   }
 
-  // Clear session caches at the start of each scrape
+  // Only clear track bias cache (keyed by track, safe to refetch)
+  // Keep jockey/trainer stats caches — they may have been pre-warmed by /warm-stats
+  // and are safe to reuse across per-track scrape calls
   trackBiasCache = {};
-  jockeyStatsCache = {};
-  trainerStatsCache = {};
 
   const allRaces = [];
   let skippedPast = 0;
@@ -930,6 +930,59 @@ Analyze this race step by step using the methodology. Search X for "${enriched.t
 }
 
 // Routes
+// Pre-warm jockey/trainer stats cache by loading runner lists for given tracks
+// Call this before scrape-now to move the slow stats fetching out of the 300s window
+app.all('/warm-stats', requireAuth, async (req, res) => {
+  try {
+    const tracksParam = req.query.tracks;
+    if (!tracksParam) return res.status(400).json({ error: "No tracks param" });
+    const tracks = tracksParam.split(',').map(t => t.trim()).filter(Boolean);
+    const raceFilter = parseRaceFilter(req.query.raceFilter);
+    const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney' })
+      .format(new Date()).split('T')[0];
+
+    serverLog(`Warm-stats called for ${tracks.length} track(s): ${tracks.join(', ')}`);
+
+    // Clear caches for a fresh session
+    trackBiasCache = {};
+    jockeyStatsCache = {};
+    trainerStatsCache = {};
+
+    // Load runner lists to extract jockey/trainer names
+    const tempRaces = [];
+    for (const track of tracks) {
+      const allowedRaces = raceFilter ? (raceFilter[track] || []) : null;
+      for (let raceNum = 1; raceNum <= 10; raceNum++) {
+        if (allowedRaces && !allowedRaces.includes(raceNum)) continue;
+        const data = await fetchRace(date, track, raceNum);
+        if (data && data.runners && data.runners.length > 0) {
+          tempRaces.push({ runners: data.runners.filter(r => !r.scratched) });
+        }
+      }
+    }
+
+    // Pre-fetch all jockey/trainer stats into cache
+    if (tempRaces.length > 0) {
+      await fetchConnectionStats(tempRaces);
+    }
+
+    // Also pre-fetch track bias for each track
+    for (const track of tracks) {
+      await fetchTrackBias(track);
+    }
+
+    res.json({
+      status: "ok",
+      jockeys: Object.keys(jockeyStatsCache).length,
+      trainers: Object.keys(trainerStatsCache).length,
+      trackBias: Object.keys(trackBiasCache).length,
+    });
+  } catch (err) {
+    serverLog(`Warm-stats error: ${err.message}`);
+    res.status(500).json({ status: "error", message: err.message });
+  }
+});
+
 app.all('/scrape-now', requireAuth, async (req, res) => {
   try {
     serverLogs = [];
