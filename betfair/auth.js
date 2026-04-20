@@ -18,7 +18,7 @@
 const https = require('https');
 const axios = require('axios');
 
-const DEFAULT_IDENTITY_URL = 'https://identitysso-cert.betfair.com.au/api/certlogin';
+const DEFAULT_IDENTITY_URL = 'https://identitysso-cert.betfair.com/api/certlogin';
 const SESSION_TTL_MS = 3.5 * 60 * 60 * 1000; // 3h 30m
 
 let sessionCache = {
