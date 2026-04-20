@@ -6,6 +6,7 @@ const cors = require('cors');
 const betfairMarkets = require('./betfair/markets');
 const betfairAuth = require('./betfair/auth');
 const betfairClient = require('./betfair/client');
+const { Redis } = require('@upstash/redis');
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -13,6 +14,15 @@ const FORMAV_API_KEY = process.env.FORMAV_API_KEY;
 const XAI_API_KEY = process.env.XAI_API_KEY;
 const EQUIEDGE_API_KEY = process.env.EQUIEDGE_API_KEY;
 const BETFAIR_ENABLED = !!(process.env.BETFAIR_APP_KEY && process.env.BETFAIR_USERNAME && process.env.BETFAIR_PASSWORD && process.env.BETFAIR_CERT_PEM && process.env.BETFAIR_KEY_PEM);
+
+// Upstash Redis for cross-user race analysis cache
+const UPSTASH_ENABLED = !!(process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN);
+const redis = UPSTASH_ENABLED ? new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN,
+}) : null;
+const CACHE_TTL_SECONDS = 18 * 60 * 60; // 18 hours
+
 let latestRaces = [];
 let serverLogs = [];
 
@@ -35,6 +45,36 @@ function serverLog(msg) {
   serverLogs.push(line);
   console.log(line);
   if (serverLogs.length > 500) serverLogs.splice(0, serverLogs.length - 500);
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Upstash Redis cache helpers
+// Key format: "cache:{track}_{YYYY-MM-DD}" e.g. "cache:randwick_2026-04-20"
+// Value: array of race objects (with suggestions + aiAnalysis)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+function cacheKey(track, date) {
+  return `cache:${track.toLowerCase().replace(/\s+/g, '-')}_${date}`;
+}
+
+async function cacheGet(track, date) {
+  if (!redis) return null;
+  try {
+    const data = await redis.get(cacheKey(track, date));
+    return data || null;
+  } catch (err) {
+    serverLog(`Cache read error for ${track}: ${err.message}`);
+    return null;
+  }
+}
+
+async function cacheSet(track, date, races) {
+  if (!redis) return;
+  try {
+    await redis.set(cacheKey(track, date), JSON.stringify(races), { ex: CACHE_TTL_SECONDS });
+    serverLog(`Cached ${races.length} races for ${track} (TTL: ${CACHE_TTL_SECONDS}s)`);
+  } catch (err) {
+    serverLog(`Cache write error for ${track}: ${err.message}`);
+  }
 }
 
 // In-memory caches for the current scrape session
@@ -925,18 +965,44 @@ async function analyzeRaceWithGrok(race) {
       const ts = r.trainerStats;
       const tsLine = ts ? `\n  Trainer Stats (90d): Win ${((ts.recentStats?.overallWinRate || ts.overallWinRate || 0) * 100).toFixed(1)}% | Place ${((ts.recentStats?.overallPlaceRate || ts.overallPlaceRate || 0) * 100).toFixed(1)}%${ts.bestCondition ? ` | Best: ${ts.bestCondition}` : ''}` : '';
 
+      // Betfair market data — surfaces fields the v5 SYSTEM_PROMPT's Step 8 and overlay rules reference
+      const mkt = r.market;
+      let mktLine;
+      if (mkt) {
+        const backStr = mkt.backPrice != null ? `$${mkt.backPrice}` : 'n/a';
+        const layStr = mkt.layPrice != null ? `$${mkt.layPrice}` : 'n/a';
+        const impliedStr = mkt.impliedProb != null ? `${(mkt.impliedProb * 100).toFixed(1)}%` : 'n/a';
+        const overlayStr = mkt.overlayRatio != null ? ` | Overlay ${mkt.overlayRatio.toFixed(2)}x` : ' | Overlay n/a';
+        const favStr = mkt.isFavorite ? ' | FAVOURITE' : '';
+        mktLine = `\n  Market: ${backStr} back / ${layStr} lay | Implied ${impliedStr}${overlayStr}${favStr} | Match: ${mkt.matchType}`;
+      } else {
+        mktLine = '\n  Market: no data';
+      }
+
       return `#${r.number} ${r.name}
   Jockey: ${r.jockey} | Trainer: ${r.trainer || 'Unknown'}${r.age ? ` | Age: ${r.age}` : ''}
   Weight: ${r.weight}kg${claimStr}
   Barrier: ${r.barrier}${r.isWideBarrier ? ' (WIDE)' : ''}${biasStr}
   Form: ${r.form || 'No form'} => ${fs.starts} starts, ${fs.wins}W/${fs.places}P, avg finish: ${fs.avgFinishPos}${fs.spells > 0 ? `, ${fs.spells} spells` : ''}${fs.fails > 0 ? `, ${fs.fails} DNF` : ''} | Last 3: ${fs.lastThree}
-  Stats: Win ${((r.stats?.overall?.winPercent || 0) * 100).toFixed(0)}% (${r.stats?.overall?.starts || 0} starts) | Track ${((r.stats?.track?.winPercent || 0) * 100).toFixed(0)}% (${r.stats?.track?.starts || 0}) | Dist ${((r.stats?.distance?.winPercent || 0) * 100).toFixed(0)}% (${r.stats?.distance?.starts || 0}) | Track+Dist ${((r.stats?.trackDistance?.winPercent || 0) * 100).toFixed(0)}% (${r.stats?.trackDistance?.starts || 0}) | Condition ${((r.stats?.condition?.winPercent || 0) * 100).toFixed(0)}% (${r.stats?.condition?.starts || 0})${fuLine}${suLine}${smLine}${classLine}${fitLine}${mlLine}${badgeLine}${jsLine}${tsLine}
+  Stats: Win ${((r.stats?.overall?.winPercent || 0) * 100).toFixed(0)}% (${r.stats?.overall?.starts || 0} starts) | Track ${((r.stats?.track?.winPercent || 0) * 100).toFixed(0)}% (${r.stats?.track?.starts || 0}) | Dist ${((r.stats?.distance?.winPercent || 0) * 100).toFixed(0)}% (${r.stats?.distance?.starts || 0}) | Track+Dist ${((r.stats?.trackDistance?.winPercent || 0) * 100).toFixed(0)}% (${r.stats?.trackDistance?.starts || 0}) | Condition ${((r.stats?.condition?.winPercent || 0) * 100).toFixed(0)}% (${r.stats?.condition?.starts || 0})${fuLine}${suLine}${smLine}${classLine}${fitLine}${mlLine}${badgeLine}${jsLine}${tsLine}${mktLine}
   Win% vs field: ${r.winPctDiff > 0 ? '+' : ''}${(r.winPctDiff * 100).toFixed(1)}% | Place% vs field: ${r.placePctDiff > 0 ? '+' : ''}${(r.placePctDiff * 100).toFixed(1)}%${flagStr}`;
     }).join('\n\n');
 
     // Track bias summary
     const tb = enriched.trackBias;
     const trackBiasLine = tb ? `TRACK BIAS: ${tb.biasStrength || 'unknown'} | Strongest: barrier ${tb.strongestBarrier || '?'} | Weakest: barrier ${tb.weakestBarrier || '?'}` : 'TRACK BIAS: No data available';
+
+    // Betfair market summary — headline liquidity + favourite for the whole race
+    const ms = enriched.marketSummary;
+    let marketHeaderLine;
+    if (ms) {
+      const totalStr = `$${Math.round(ms.totalMatched || 0).toLocaleString('en-AU')}`;
+      const liquidityStr = ms.hasLiquidity ? 'LIQUID' : 'ILLIQUID - overlay disabled (totalMatched < $20,000)';
+      const favStr = ms.favorite ? `${ms.favorite.name} (#${ms.favorite.number}) @ $${ms.favorite.price}` : 'n/a';
+      marketHeaderLine = `BETFAIR MARKET: ${totalStr} matched (${liquidityStr}) | Status: ${ms.status || 'UNKNOWN'} | Favourite: ${favStr}${ms.unmatchedCount ? ` | Unmatched runners: ${ms.unmatchedCount}` : ''}`;
+    } else {
+      marketHeaderLine = 'BETFAIR MARKET: No data — fall back to non-market factors';
+    }
 
     const userMessage = `RACE: ${enriched.track} Race ${enriched.raceNumber}${enriched.raceName ? ` (${enriched.raceName})` : ''}
 DISTANCE: ${enriched.distance} (${enriched.distanceCategory})
@@ -945,6 +1011,7 @@ WEATHER: ${enriched.weather}
 ${enriched.raceClass ? `RACE CLASS: ${enriched.raceClass}\n` : ''}${enriched.paceScenario ? `PACE SCENARIO: ${enriched.paceScenario}\n` : ''}FIELD SIZE: ${enriched.fieldSize} runners
 ${trackBiasLine}
 ${enriched.mlModelConfidence ? `ML MODEL CONFIDENCE: ${enriched.mlModelConfidence}` : 'ML MODEL: No predictions available'}
+${marketHeaderLine}
 FIELD AVERAGES:
 - Weight: ${enriched.fieldAvg.weight}kg | Win%: ${enriched.fieldAvg.winPct}% | Place%: ${enriched.fieldAvg.placePct}%${enriched.fieldAvg.classRating > 0 ? ` | Class Rating: ${enriched.fieldAvg.classRating}` : ''}
 
@@ -1103,40 +1170,84 @@ app.all('/scrape-now', requireAuth, async (req, res) => {
     }
     const tracks = tracksParam.split(',').map(t => t.trim()).filter(Boolean);
     const raceFilter = parseRaceFilter(req.query.raceFilter);
-    serverLog(`Scrape-now called (ai=${req.query.ai || 'false'}, tracks: ${tracks.join(', ')}${raceFilter ? ', filtered' : ''})`);
-    const races = await scrapeFormFav(tracks, raceFilter);
-    if (req.query.ai === 'true' && XAI_API_KEY) {
-      const BATCH_SIZE = 4; // Run 4 Grok calls in parallel
-      serverLog(`Running Grok AI analysis on ${races.length} races (batches of ${BATCH_SIZE})...`);
-      for (let i = 0; i < races.length; i += BATCH_SIZE) {
-        const batch = races.slice(i, i + BATCH_SIZE);
-        const batchNum = Math.floor(i / BATCH_SIZE) + 1;
-        const totalBatches = Math.ceil(races.length / BATCH_SIZE);
-        serverLog(`Batch ${batchNum}/${totalBatches}: ${batch.map(r => `${r.track} R${r.raceNumber}`).join(', ')}`);
-        const results = await Promise.all(batch.map(race => analyzeRaceWithGrok(race)));
-        for (let j = 0; j < batch.length; j++) {
-          batch[j].suggestions = results[j].selections;
-          batch[j].aiAnalysis = results[j].analysis;
+    const useAi = req.query.ai === 'true' && XAI_API_KEY;
+    const skipCache = req.query.skipCache === 'true';
+    const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney' })
+      .format(new Date()).split('T')[0];
+
+    serverLog(`Scrape-now called (ai=${useAi}, tracks: ${tracks.join(', ')}${raceFilter ? ', filtered' : ''}${skipCache ? ', skip-cache' : ''})`);
+
+    // Check Upstash cache for each track (only when AI is requested and cache not skipped)
+    const cachedRaces = [];
+    const uncachedTracks = [];
+    if (useAi && !skipCache) {
+      for (const track of tracks) {
+        const cached = await cacheGet(track, date);
+        if (cached) {
+          const parsed = typeof cached === 'string' ? JSON.parse(cached) : cached;
+          cachedRaces.push(...parsed);
+          serverLog(`Cache HIT for ${track} (${parsed.length} races)`);
+        } else {
+          uncachedTracks.push(track);
         }
       }
-      const picksCount = races.filter(r => r.suggestions.length > 0).length;
-      const passCount = races.length - picksCount;
-      serverLog(`Grok AI complete — ${picksCount} picks, ${passCount} passes from ${races.length} races (${Math.round(passCount / races.length * 100)}% pass rate)`);
     } else {
-      races.forEach(r => { r.suggestions = []; r.aiAnalysis = ""; });
+      uncachedTracks.push(...tracks);
     }
+
+    // Scrape only uncached tracks
+    let freshRaces = [];
+    if (uncachedTracks.length > 0) {
+      freshRaces = await scrapeFormFav(uncachedTracks, raceFilter);
+      if (useAi) {
+        const BATCH_SIZE = 4;
+        serverLog(`Running Grok AI analysis on ${freshRaces.length} races (batches of ${BATCH_SIZE})...`);
+        for (let i = 0; i < freshRaces.length; i += BATCH_SIZE) {
+          const batch = freshRaces.slice(i, i + BATCH_SIZE);
+          const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+          const totalBatches = Math.ceil(freshRaces.length / BATCH_SIZE);
+          serverLog(`Batch ${batchNum}/${totalBatches}: ${batch.map(r => `${r.track} R${r.raceNumber}`).join(', ')}`);
+          const results = await Promise.all(batch.map(race => analyzeRaceWithGrok(race)));
+          for (let j = 0; j < batch.length; j++) {
+            batch[j].suggestions = results[j].selections;
+            batch[j].aiAnalysis = results[j].analysis;
+          }
+        }
+        const picksCount = freshRaces.filter(r => r.suggestions.length > 0).length;
+        const passCount = freshRaces.length - picksCount;
+        serverLog(`Grok AI complete — ${picksCount} picks, ${passCount} passes from ${freshRaces.length} races (${Math.round(passCount / freshRaces.length * 100)}% pass rate)`);
+
+        // Write freshly analysed races to Upstash cache (grouped by track)
+        const byTrack = {};
+        for (const race of freshRaces) {
+          const slug = race.track.toLowerCase().replace(/\s+/g, '-');
+          if (!byTrack[slug]) byTrack[slug] = [];
+          byTrack[slug].push(race);
+        }
+        for (const [slug, trackRaces] of Object.entries(byTrack)) {
+          await cacheSet(slug, date, trackRaces);
+        }
+      } else {
+        freshRaces.forEach(r => { r.suggestions = []; r.aiAnalysis = ""; });
+      }
+    }
+
+    const allRaces = [...cachedRaces, ...freshRaces];
+
     // Accumulate races across per-track scrape calls (remove old races from same tracks)
-    const incomingTracks = new Set(races.map(r => r.track));
-    latestRaces = latestRaces.filter(r => !incomingTracks.has(r.track)).concat(races);
+    const incomingTracks = new Set(allRaces.map(r => r.track));
+    latestRaces = latestRaces.filter(r => !incomingTracks.has(r.track)).concat(allRaces);
     // Return full race data so iOS can cache per-track without relying on /today-races
     res.json({
       status: "ok",
-      races: races.length,
-      picks: races.filter(r => r.suggestions && r.suggestions.length > 0).length,
-      passes: races.filter(r => !r.suggestions || r.suggestions.length === 0).length,
-      date: new Date().toISOString().split('T')[0],
-      source: req.query.ai === 'true' ? "Grok AI + FormFav" : "FormFav",
-      raceData: races
+      races: allRaces.length,
+      picks: allRaces.filter(r => r.suggestions && r.suggestions.length > 0).length,
+      passes: allRaces.filter(r => !r.suggestions || r.suggestions.length === 0).length,
+      cached: cachedRaces.length,
+      fresh: freshRaces.length,
+      date,
+      source: useAi ? "Grok AI + FormFav" : "FormFav",
+      raceData: allRaces
     });
   } catch (err) {
     serverLog(`Scrape error: ${err.message}`);
@@ -1150,6 +1261,78 @@ app.get('/logs', requireAuth, (req, res) => {
 
 app.get('/today-races', requireAuth, (req, res) => {
   res.json(latestRaces);
+});
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Cache access endpoints — read cached analysis off-device
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// GET /cache/list?date=YYYY-MM-DD — list all cached track-days for a date
+app.get('/cache/list', requireAuth, async (req, res) => {
+  if (!redis) return res.json({ enabled: false, keys: [] });
+  try {
+    const date = req.query.date || new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney' })
+      .format(new Date()).split('T')[0];
+    // Scan for all keys matching cache:*_DATE
+    const pattern = `cache:*_${date}`;
+    let cursor = 0;
+    const keys = [];
+    do {
+      const result = await redis.scan(cursor, { match: pattern, count: 100 });
+      cursor = result[0];
+      keys.push(...result[1]);
+    } while (cursor && cursor !== 0 && cursor !== '0');
+
+    const entries = keys.map(k => {
+      const match = k.match(/^cache:(.+)_(\d{4}-\d{2}-\d{2})$/);
+      return match ? { key: k, track: match[1], date: match[2] } : { key: k };
+    });
+    res.json({ enabled: true, date, count: entries.length, entries });
+  } catch (err) {
+    serverLog(`Cache list error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /cache/:track/:date — read cached analysis for a specific track-day
+// e.g. /cache/randwick/2026-04-20
+app.get('/cache/:track/:date', requireAuth, async (req, res) => {
+  if (!redis) return res.status(503).json({ error: 'Cache not enabled' });
+  try {
+    const { track, date } = req.params;
+    const key = cacheKey(track, date);
+    const data = await redis.get(key);
+    if (!data) return res.status(404).json({ error: 'Not found', key });
+    const parsed = typeof data === 'string' ? JSON.parse(data) : data;
+    const ttl = await redis.ttl(key);
+    res.json({
+      key,
+      track,
+      date,
+      ttlSeconds: ttl,
+      races: parsed.length,
+      picks: parsed.filter(r => r.suggestions && r.suggestions.length > 0).length,
+      raceData: parsed
+    });
+  } catch (err) {
+    serverLog(`Cache read error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /cache/:track/:date — invalidate a cached track-day (force re-scrape)
+app.delete('/cache/:track/:date', requireAuth, async (req, res) => {
+  if (!redis) return res.status(503).json({ error: 'Cache not enabled' });
+  try {
+    const { track, date } = req.params;
+    const key = cacheKey(track, date);
+    const deleted = await redis.del(key);
+    serverLog(`Cache invalidated: ${key} (existed: ${deleted > 0})`);
+    res.json({ key, deleted: deleted > 0 });
+  } catch (err) {
+    serverLog(`Cache delete error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Phase 5: Betfair diagnostics. Confirms creds are wired and session is alive.
@@ -1182,8 +1365,445 @@ app.get('/betfair/health', requireAuth, async (req, res) => {
   }
 });
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Subscription endpoints — Phase 1
+// User records + usage tracking in Upstash Redis
+// Key schema:
+//   "user:{appleUserId}"        -> user record JSON (no TTL)
+//   "usage:{appleUserId}:week"  -> weekly usage tracking (TTL: 7 days)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+const { createRemoteJWKSet, jwtVerify } = require('jose');
+
+const APPLE_JWKS = createRemoteJWKSet(new URL('https://appleid.apple.com/auth/keys'));
+const APPLE_ISSUER = 'https://appleid.apple.com';
+const APPLE_BUNDLE_ID = process.env.APPLE_BUNDLE_ID || 'Eedge.EquiEdge';
+const ADMIN_SECRET = process.env.ADMIN_SECRET;
+const TRIAL_DURATION_DAYS = 3;
+const TRIAL_MAX_USAGE = 3;
+const BASIC_WEEKLY_LIMIT = 10;
+
+// Helper: get current ISO week string e.g. "2026-W16"
+function isoWeek(date) {
+  const d = new Date(date);
+  d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const weekNum = Math.ceil(((d - yearStart) / 86400000 + 1) / 7);
+  return `${d.getUTCFullYear()}-W${String(weekNum).padStart(2, '0')}`;
+}
+
+// Helper: Sydney date string YYYY-MM-DD
+function sydneyDate() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney' })
+    .format(new Date()).split('T')[0];
+}
+
+// Helper: read user record from Upstash
+async function getUser(appleUserId) {
+  if (!redis) return null;
+  const data = await redis.get(`user:${appleUserId}`);
+  if (!data) return null;
+  return typeof data === 'string' ? JSON.parse(data) : data;
+}
+
+// Helper: write user record to Upstash (no TTL — permanent)
+async function setUser(appleUserId, record) {
+  if (!redis) return;
+  await redis.set(`user:${appleUserId}`, JSON.stringify(record));
+}
+
+// Helper: compute effective tier (checks trial expiry)
+function effectiveTier(user) {
+  if (!user) return 'expired';
+  if (user.tier === 'pro' || user.tier === 'basic') {
+    // Check subscription expiry if set
+    if (user.subscriptionExpiresAt) {
+      const expires = new Date(user.subscriptionExpiresAt);
+      if (expires < new Date()) return 'expired';
+    }
+    return user.tier;
+  }
+  if (user.tier === 'trial') {
+    const start = new Date(user.trialStartDate);
+    const now = new Date();
+    const daysElapsed = (now - start) / (1000 * 60 * 60 * 24);
+    if (daysElapsed > TRIAL_DURATION_DAYS) return 'expired';
+    if ((user.trialUsage || []).length >= TRIAL_MAX_USAGE) return 'expired';
+    return 'trial';
+  }
+  return 'expired';
+}
+
+// Helper: compute usage info for response
+function usageInfo(user) {
+  const tier = effectiveTier(user);
+  const now = new Date();
+  const result = { tier };
+
+  if (tier === 'trial') {
+    const start = new Date(user.trialStartDate);
+    const daysElapsed = (now - start) / (1000 * 60 * 60 * 24);
+    result.trialDaysRemaining = Math.max(0, Math.ceil(TRIAL_DURATION_DAYS - daysElapsed));
+    result.trialUsesRemaining = Math.max(0, TRIAL_MAX_USAGE - (user.trialUsage || []).length);
+    result.trialUsage = user.trialUsage || [];
+  }
+
+  if (tier === 'basic') {
+    const currentWeek = isoWeek(now);
+    const weekly = user.weeklyUsage || {};
+    const tracks = (weekly.isoWeek === currentWeek) ? (weekly.tracks || []) : [];
+    result.trackDaysUsedThisWeek = tracks.length;
+    result.trackDayLimit = BASIC_WEEKLY_LIMIT;
+    result.weeklyTracks = tracks;
+  }
+
+  if (tier === 'pro') {
+    result.trackDayLimit = null; // unlimited
+  }
+
+  if (user.subscriptionExpiresAt) {
+    result.subscriptionExpiresAt = user.subscriptionExpiresAt;
+  }
+
+  return result;
+}
+
+// Middleware: extract userId from Authorization header
+function requireUserId(req, res, next) {
+  const auth = req.headers.authorization;
+  if (!auth || !auth.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Missing Authorization header' });
+  }
+  req.userId = auth.substring(7).trim();
+  if (!req.userId) {
+    return res.status(401).json({ error: 'Empty user ID' });
+  }
+  next();
+}
+
+// POST /api/auth/apple — Sign in with Apple
+// Body: { identityToken: "<JWT>", userIdentifier: "<stable Apple ID>" }
+// Returns: user record + usage info
+app.post('/api/auth/apple', async (req, res) => {
+  if (!redis) return res.status(503).json({ error: 'Backend storage not configured' });
+
+  const { identityToken, userIdentifier } = req.body || {};
+  if (!identityToken || !userIdentifier) {
+    return res.status(400).json({ error: 'identityToken and userIdentifier are required' });
+  }
+
+  try {
+    // Verify Apple identity token (JWT signed by Apple)
+    const { payload } = await jwtVerify(identityToken, APPLE_JWKS, {
+      issuer: APPLE_ISSUER,
+      audience: APPLE_BUNDLE_ID,
+    });
+
+    // The 'sub' claim is the stable Apple user identifier
+    const appleSub = payload.sub;
+    if (appleSub !== userIdentifier) {
+      serverLog(`Apple auth: sub mismatch — token sub: ${appleSub}, provided: ${userIdentifier}`);
+      return res.status(403).json({ error: 'User identifier mismatch' });
+    }
+
+    // Look up or create user record
+    let user = await getUser(appleSub);
+    const isNewUser = !user;
+
+    if (isNewUser) {
+      user = {
+        appleUserId: appleSub,
+        tier: 'trial',
+        trialStartDate: new Date().toISOString(),
+        trialUsage: [],
+        weeklyUsage: { isoWeek: isoWeek(new Date()), tracks: [] },
+        subscriptionExpiresAt: null,
+        createdAt: new Date().toISOString(),
+      };
+      await setUser(appleSub, user);
+      serverLog(`New user created: ${appleSub.substring(0, 8)}... (trial started)`);
+    } else {
+      serverLog(`Returning user: ${appleSub.substring(0, 8)}... (tier: ${user.tier})`);
+    }
+
+    res.json({
+      userId: appleSub,
+      isNewUser,
+      email: payload.email || null,
+      ...usageInfo(user),
+    });
+  } catch (err) {
+    serverLog(`Apple auth failed: ${err.message}`);
+    if (err.code === 'ERR_JWT_EXPIRED') {
+      return res.status(401).json({ error: 'Identity token expired' });
+    }
+    if (err.code === 'ERR_JWS_SIGNATURE_VERIFICATION_FAILED') {
+      return res.status(401).json({ error: 'Invalid identity token signature' });
+    }
+    res.status(401).json({ error: 'Token validation failed', detail: err.message });
+  }
+});
+
+// GET /api/user/status — current tier + usage
+// Header: Authorization: Bearer <userId>
+app.get('/api/user/status', requireUserId, async (req, res) => {
+  if (!redis) return res.status(503).json({ error: 'Backend storage not configured' });
+
+  try {
+    const user = await getUser(req.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    res.json({
+      userId: req.userId,
+      ...usageInfo(user),
+    });
+  } catch (err) {
+    serverLog(`User status error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/user/record-usage — record a track-day analysis
+// Header: Authorization: Bearer <userId>
+// Body: { trackSlug: "randwick", date: "2026-04-20" }
+app.post('/api/user/record-usage', requireUserId, async (req, res) => {
+  if (!redis) return res.status(503).json({ error: 'Backend storage not configured' });
+
+  const { trackSlug, date } = req.body || {};
+  if (!trackSlug || !date) {
+    return res.status(400).json({ error: 'trackSlug and date are required' });
+  }
+
+  const compositeKey = `${trackSlug.toLowerCase().replace(/\s+/g, '-')}_${date}`;
+
+  try {
+    const user = await getUser(req.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const tier = effectiveTier(user);
+
+    if (tier === 'expired') {
+      return res.status(403).json({ error: 'Subscription expired', tier: 'expired' });
+    }
+
+    if (tier === 'trial') {
+      // Check if this track-day already used (free re-run)
+      if (!(user.trialUsage || []).includes(compositeKey)) {
+        if ((user.trialUsage || []).length >= TRIAL_MAX_USAGE) {
+          return res.status(403).json({ error: 'Trial limit reached', tier: 'expired' });
+        }
+        user.trialUsage = [...(user.trialUsage || []), compositeKey];
+      }
+    }
+
+    if (tier === 'basic') {
+      const currentWeek = isoWeek(new Date());
+      if (!user.weeklyUsage || user.weeklyUsage.isoWeek !== currentWeek) {
+        user.weeklyUsage = { isoWeek: currentWeek, tracks: [] };
+      }
+      // Check if this track-day already used (free re-run)
+      if (!user.weeklyUsage.tracks.includes(compositeKey)) {
+        if (user.weeklyUsage.tracks.length >= BASIC_WEEKLY_LIMIT) {
+          return res.status(403).json({
+            error: 'Weekly limit reached',
+            tier: 'basic',
+            trackDaysUsedThisWeek: user.weeklyUsage.tracks.length,
+            trackDayLimit: BASIC_WEEKLY_LIMIT,
+          });
+        }
+        user.weeklyUsage.tracks.push(compositeKey);
+      }
+    }
+
+    // Pro tier: no limits, just record for analytics
+    await setUser(req.userId, user);
+
+    res.json({
+      userId: req.userId,
+      recorded: compositeKey,
+      ...usageInfo(user),
+    });
+  } catch (err) {
+    serverLog(`Record usage error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/apple-notifications — App Store Server Notifications V2
+// Apple sends signed JWS payloads for subscription lifecycle events
+app.post('/api/apple-notifications', async (req, res) => {
+  if (!redis) return res.status(503).json({ error: 'Backend storage not configured' });
+
+  const { signedPayload } = req.body || {};
+  if (!signedPayload) {
+    return res.status(400).json({ error: 'Missing signedPayload' });
+  }
+
+  try {
+    // Decode the JWS payload (Apple signs with their own keys)
+    // For V2, the payload is a JWS signed by Apple's App Store key
+    // We verify using Apple's public keys
+    const { payload } = await jwtVerify(signedPayload, APPLE_JWKS, {
+      issuer: APPLE_ISSUER,
+    });
+
+    const notificationType = payload.notificationType;
+    const subtype = payload.subtype || null;
+
+    // Extract transaction info from the signed payload
+    let transactionInfo = null;
+    if (payload.data && payload.data.signedTransactionInfo) {
+      const txResult = await jwtVerify(payload.data.signedTransactionInfo, APPLE_JWKS, {
+        issuer: APPLE_ISSUER,
+      });
+      transactionInfo = txResult.payload;
+    }
+
+    // Extract renewal info
+    let renewalInfo = null;
+    if (payload.data && payload.data.signedRenewalInfo) {
+      const rnResult = await jwtVerify(payload.data.signedRenewalInfo, APPLE_JWKS, {
+        issuer: APPLE_ISSUER,
+      });
+      renewalInfo = rnResult.payload;
+    }
+
+    const appAccountToken = transactionInfo?.appAccountToken; // This is the Apple user ID we set
+    const productId = transactionInfo?.productId;
+    const expiresDate = transactionInfo?.expiresDate;
+
+    serverLog(`Apple notification: ${notificationType}${subtype ? `/${subtype}` : ''} | product: ${productId || 'n/a'} | user: ${appAccountToken ? appAccountToken.substring(0, 8) + '...' : 'n/a'}`);
+
+    if (!appAccountToken) {
+      // Can't map to a user without appAccountToken — acknowledge receipt anyway
+      serverLog('Apple notification: no appAccountToken — cannot map to user');
+      return res.json({ status: 'ok', note: 'no user mapping' });
+    }
+
+    const user = await getUser(appAccountToken);
+    if (!user) {
+      serverLog(`Apple notification: user ${appAccountToken.substring(0, 8)}... not found`);
+      return res.json({ status: 'ok', note: 'user not found' });
+    }
+
+    // Determine new tier from product ID
+    let newTier = null;
+    if (productId) {
+      if (productId.includes('pro')) newTier = 'pro';
+      else if (productId.includes('basic')) newTier = 'basic';
+    }
+
+    // Handle notification types
+    switch (notificationType) {
+      case 'SUBSCRIBED':
+      case 'DID_RENEW':
+        if (newTier) {
+          user.tier = newTier;
+          user.subscriptionExpiresAt = expiresDate ? new Date(expiresDate).toISOString() : null;
+          serverLog(`User ${appAccountToken.substring(0, 8)}... -> ${newTier} (expires: ${user.subscriptionExpiresAt || 'n/a'})`);
+        }
+        break;
+
+      case 'EXPIRED':
+      case 'DID_REVOKE':
+      case 'REFUND':
+        user.tier = 'expired';
+        user.subscriptionExpiresAt = new Date().toISOString();
+        serverLog(`User ${appAccountToken.substring(0, 8)}... -> expired (${notificationType})`);
+        break;
+
+      case 'DID_CHANGE_RENEWAL_STATUS':
+        // User turned off auto-renew — don't change tier yet, just log
+        serverLog(`User ${appAccountToken.substring(0, 8)}... auto-renew changed (subtype: ${subtype})`);
+        break;
+
+      case 'DID_CHANGE_RENEWAL_INFO':
+        // Upgrade/downgrade within subscription group
+        if (subtype === 'UPGRADE' && newTier) {
+          user.tier = newTier;
+          serverLog(`User ${appAccountToken.substring(0, 8)}... upgraded to ${newTier}`);
+        } else if (subtype === 'DOWNGRADE' && newTier) {
+          // Downgrade takes effect at next renewal — log but don't change now
+          serverLog(`User ${appAccountToken.substring(0, 8)}... scheduled downgrade to ${newTier}`);
+        }
+        break;
+
+      default:
+        serverLog(`Apple notification: unhandled type ${notificationType}`);
+    }
+
+    await setUser(appAccountToken, user);
+    res.json({ status: 'ok' });
+  } catch (err) {
+    serverLog(`Apple notification error: ${err.message}`);
+    // Always return 200 to Apple to prevent retries for parsing errors
+    // Only return error status for genuine server failures
+    if (err.code && err.code.startsWith('ERR_J')) {
+      // JWT verification errors — likely not a real Apple notification
+      return res.status(400).json({ error: 'Invalid notification payload' });
+    }
+    res.json({ status: 'error', message: err.message });
+  }
+});
+
+// POST /api/admin/set-tier — Admin override for comp/test accounts
+// Header: Authorization: Bearer <ADMIN_SECRET>
+// Body: { appleUserId, tier: "pro"|"basic"|"expired", expiresAt: null|ISO }
+app.post('/api/admin/set-tier', async (req, res) => {
+  if (!redis) return res.status(503).json({ error: 'Backend storage not configured' });
+
+  const auth = req.headers.authorization;
+  if (!ADMIN_SECRET || !auth || auth !== `Bearer ${ADMIN_SECRET}`) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const { appleUserId, tier, expiresAt } = req.body || {};
+  if (!appleUserId || !tier) {
+    return res.status(400).json({ error: 'appleUserId and tier are required' });
+  }
+  if (!['trial', 'basic', 'pro', 'expired'].includes(tier)) {
+    return res.status(400).json({ error: 'Invalid tier. Must be trial, basic, pro, or expired' });
+  }
+
+  try {
+    let user = await getUser(appleUserId);
+    if (!user) {
+      // Create a minimal user record for admin-provisioned accounts
+      user = {
+        appleUserId,
+        tier,
+        trialStartDate: new Date().toISOString(),
+        trialUsage: [],
+        weeklyUsage: { isoWeek: isoWeek(new Date()), tracks: [] },
+        subscriptionExpiresAt: expiresAt || null,
+        createdAt: new Date().toISOString(),
+        adminOverride: true,
+      };
+    } else {
+      user.tier = tier;
+      user.subscriptionExpiresAt = expiresAt || null;
+      user.adminOverride = true;
+    }
+
+    await setUser(appleUserId, user);
+    serverLog(`Admin set-tier: ${appleUserId.substring(0, 8)}... -> ${tier} (expires: ${expiresAt || 'never'})`);
+
+    res.json({
+      userId: appleUserId,
+      ...usageInfo(user),
+      adminOverride: true,
+    });
+  } catch (err) {
+    serverLog(`Admin set-tier error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/', (req, res) => {
-  res.json({ status: "ok", message: "EquiEdge Scraper running", version: "2.1-betfair" });
+  res.json({ status: "ok", message: "EquiEdge Scraper running", version: "2.2-subscription" });
 });
 
 module.exports = app;

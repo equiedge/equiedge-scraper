@@ -1,0 +1,174 @@
+{
+  "identifier" : "EquiEdge Subscriptions",
+  "nonRenewingSubscriptions" : [
+
+  ],
+  "products" : [
+
+  ],
+  "settings" : {
+    "_failTransactionsEnabled" : false,
+    "_storeKitErrors" : [
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Load Products"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Purchase"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Verification"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "App Store Sync"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Subscription Status"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "App Transaction"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Manage Subscriptions Sheet"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Refund Request Sheet"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Offer Code Redeem Sheet"
+      }
+    ]
+  },
+  "subscriptionGroups" : [
+    {
+      "id" : "equiedge_premium",
+      "localizations" : [
+
+      ],
+      "name" : "EquiEdge Premium",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "14.99",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "basic_monthly_001",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "10 track-day analyses per week",
+              "displayName" : "Basic Monthly",
+              "locale" : "en_AU"
+            }
+          ],
+          "productID" : "equiedge.basic.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Basic Monthly",
+          "subscriptionGroupID" : "equiedge_premium",
+          "type" : "RecurringSubscription"
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "143.88",
+          "familyShareable" : false,
+          "groupNumber" : 2,
+          "internalID" : "basic_annual_001",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "10 track-day analyses per week — save 20%",
+              "displayName" : "Basic Annual",
+              "locale" : "en_AU"
+            }
+          ],
+          "productID" : "equiedge.basic.annual",
+          "recurringSubscriptionPeriod" : "P1Y",
+          "referenceName" : "Basic Annual",
+          "subscriptionGroupID" : "equiedge_premium",
+          "type" : "RecurringSubscription"
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "34.99",
+          "familyShareable" : false,
+          "groupNumber" : 3,
+          "internalID" : "pro_monthly_001",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Unlimited track-day analyses",
+              "displayName" : "Pro Monthly",
+              "locale" : "en_AU"
+            }
+          ],
+          "productID" : "equiedge.pro.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Pro Monthly",
+          "subscriptionGroupID" : "equiedge_premium",
+          "type" : "RecurringSubscription"
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "347.88",
+          "familyShareable" : false,
+          "groupNumber" : 4,
+          "internalID" : "pro_annual_001",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Unlimited analyses — save 20%",
+              "displayName" : "Pro Annual",
+              "locale" : "en_AU"
+            }
+          ],
+          "productID" : "equiedge.pro.annual",
+          "recurringSubscriptionPeriod" : "P1Y",
+          "referenceName" : "Pro Annual",
+          "subscriptionGroupID" : "equiedge_premium",
+          "type" : "RecurringSubscription"
+        }
+      ]
+    }
+  ],
+  "version" : {
+    "major" : 3,
+    "minor" : 0
+  }
+}
