@@ -1,0 +1,9 @@
+{
+  "_comment": "Manual corrections for race-matching when automatic resolution fails. Start empty; add entries as you see mismatches in the logs.",
+  "_schema": {
+    "tracks": "Map of formfav-slug -> betfair-venue-name when normalisation rules don't match (e.g. 'gold-coast' -> 'Gold Coast (AUS)'). Keys lowercased slug-style.",
+    "horses": "Map of formfav-name -> betfair-name when exact + fuzzy match both fail. Keys/values lowercased, punctuation stripped."
+  },
+  "tracks": {},
+  "horses": {}
+}

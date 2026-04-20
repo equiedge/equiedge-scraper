@@ -149,7 +149,7 @@ struct TodayRacesView: View {
                             HStack(spacing: 5) {
                                 Image(systemName: "brain.head.profile")
                                     .font(.caption)
-                                Text(isAnalysing ? "Analysing..." : "Edge AI")
+                                Text(isAnalysing ? "Analysing..." : "Run Edge AI Analysis")
                                     .font(.caption.weight(.bold))
                                 if isAnalysing {
                                     ProgressView()
@@ -169,18 +169,6 @@ struct TodayRacesView: View {
                             )
                         }
                         .disabled(isAnalysing)
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    NavigationLink(value: RacesDestination.edgePicks) {
-                        Text("Edge Picks")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(
-                                Capsule().fill(EEColors.edgeGradient)
-                            )
                     }
                 }
             }

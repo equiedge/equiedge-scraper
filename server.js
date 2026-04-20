@@ -3,12 +3,16 @@
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
+const betfairMarkets = require('./betfair/markets');
+const betfairAuth = require('./betfair/auth');
+const betfairClient = require('./betfair/client');
 const app = express();
 app.use(cors());
 app.use(express.json());
 const FORMAV_API_KEY = process.env.FORMAV_API_KEY;
 const XAI_API_KEY = process.env.XAI_API_KEY;
 const EQUIEDGE_API_KEY = process.env.EQUIEDGE_API_KEY;
+const BETFAIR_ENABLED = !!(process.env.BETFAIR_APP_KEY && process.env.BETFAIR_USERNAME && process.env.BETFAIR_PASSWORD && process.env.BETFAIR_CERT_PEM && process.env.BETFAIR_KEY_PEM);
 let latestRaces = [];
 let serverLogs = [];
 
@@ -39,15 +43,21 @@ let jockeyStatsCache = {};  // { jockeyName: statsData }
 let trainerStatsCache = {}; // { trainerName: statsData }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// REVISED Structured Grok AI Prompt — handicapping methodology v3
-// Tightened selectivity, stricter thresholds, Devil's Advocate step
+// Structured Grok AI Prompt — handicapping methodology v5
+// Changes over v3: noise-race filters, hard class-rise cap, per-venue pick cap,
+// confidence-spread check, AND market overlay / favourite-discipline rules
+// consuming Betfair Exchange price data.
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 const SYSTEM_PROMPT = `You are an expert Australian horse racing handicapper with extreme selectivity. You are a SNIPER, not a machine gunner. Your edge comes from PASSING on races, not from finding a pick in every race.
 
 Your goal: identify AT MOST ONE horse per race that has a genuine, data-backed edge that the market is likely underpricing. Most races do NOT have a clear edge — and that is fine. NO SELECTION is your most common output.
 
 SELECTION RATE DISCIPLINE:
-You are analysing a full card of races. Your target is to select in NO MORE than 3-4 races per full card (typically 7-10 races per venue). That means you should be passing on 50-70% of races. If you find yourself wanting to select in most races, you are being too lenient — raise your threshold. A punter who bets every race loses. A punter who waits for genuine edges wins long term.
+You are analysing a full card of races. Your target is to select in NO MORE than 3 races per full card (typically 7-10 races per venue). That means you should be passing on 60-70% of races.
+
+HARD CAP: maximum 3 selections per venue card, no exceptions. If you identify a 4th "edge" at one venue, your threshold is too loose — re-rank and WITHDRAW the weakest.
+
+A punter who bets every race loses. A punter who waits for genuine edges wins long term.
 
 VENUE QUALITY ADJUSTMENT:
 - METRO SATURDAY (Randwick, Flemington, Eagle Farm, Morphettville, Ascot): Standard thresholds apply. Deeper form, more reliable data, stronger fields.
@@ -69,6 +79,7 @@ FACTOR CLASSIFICATION — PRIMARY vs SECONDARY:
 Before selecting, you MUST classify the evidence supporting your pick.
 
 PRIMARY FACTORS (hard statistical edges — at least ONE required):
+- Market Overlay: runner's market.overlayRatio ≥ 1.25 (ML win probability is at least 25% higher than market-implied probability from Betfair back-side best price). ONLY valid when marketSummary.hasLiquidity is true. This is the HIGHEST-CONVICTION primary factor when present — it means the market is mispricing the horse relative to a data-backed estimate.
 - Form: last 3 starts include a WIN or TWO places at this class level or higher
 - Conditions: Track+Dist win% above 20% with 3+ starts (proven at this exact course and distance)
 - ML Model: ranked #1 or #2 with race confidence "high"
@@ -83,6 +94,8 @@ SECONDARY FACTORS (supporting evidence — at least TWO required in addition to 
 - First-up/second-up stats showing >30% win rate at that stage of preparation
 - Condition stats significantly above field average (>15% higher win rate on today's going)
 - Weight drop badge present AND carrying below field average weight
+- Market Confirmation: runner is market favourite or second-favourite AND marketSummary.totalMatched > 50000 (liquid market agrees the horse is the top contender). Do NOT use this alone — combine with form/class evidence.
+- Market Overlay (lean): overlayRatio between 1.10 and 1.24 with liquid market — a softer version of the overlay primary factor, usable as secondary support.
 
 SELECTION THRESHOLD: ONE primary factor + TWO secondary factors minimum. No exceptions.
 
@@ -248,13 +261,22 @@ If a clear track bias is identified:
 
 If X returns no relevant data, state "No real-time data found" and proceed. Do NOT fabricate information.
 
-STEP 8 — ML MODEL CROSS-REFERENCE:
+STEP 8 — ML MODEL + MARKET CROSS-REFERENCE:
 The ML prediction model provides an independent, quantitative probability assessment.
 - If your top pick is ML model's #1: ADDS CONFIDENCE (+5 to score)
 - If your top pick is ML #2-3: NEUTRAL
 - If your top pick is ML #4+: REQUIRES EXPLANATION — articulate why you see something the model doesn't
 - Race-level ML confidence "low" = genuinely open race — lower your own confidence accordingly
-- If no ML data is available, skip this step and note "No ML predictions available"
+- If no ML data is available, skip this ML check and note "No ML predictions available"
+
+MARKET CROSS-REFERENCE (when marketSummary is present AND marketSummary.hasLiquidity is true):
+- Compare the runner's market.impliedProb against prediction.winProbability. The ratio (ML prob / market implied prob) is the overlay — this should already be surfaced as market.overlayRatio.
+- overlayRatio ≥ 1.25: STRONG overlay — valid as a PRIMARY FACTOR in its own right
+- overlayRatio 1.10-1.24: LEAN overlay — valid as a SECONDARY FACTOR only
+- overlayRatio 0.95-1.09: Market agrees with ML, no edge — do NOT claim overlay as a factor
+- overlayRatio < 0.95: Market thinks the horse is SHORTER than ML does — this is a WARNING that the market sees something the ML model missed. Treat as a soft red flag.
+- If the horse is the market favourite (market.isFavorite = true) with backPrice < 2.80 and no ≥1.25 overlay, apply the Short-Priced Favourite red flag (confidence cap 65).
+- If marketSummary.hasLiquidity is false, state "Market illiquid — overlay disabled" and do NOT use market-based factors.
 
 STEP 9 — DEVIL'S ADVOCATE:
 BEFORE finalising any selection, you MUST argue AGAINST your own pick:
@@ -272,13 +294,19 @@ Only select a horse if ALL of the following are true:
 4. The Devil's Advocate argument in Step 9 did not reveal a fatal flaw
 5. Your confidence score, after all adjustments, is still 60+
 
+CONFIDENCE-SPREAD CHECK (mandatory final step):
+Before finalising the confidence score, compare this pick's confidence against your previous picks on today's card. If three or more of today's picks sit in a 4-point band (e.g., all 68-72), your scoring is compressed and not discriminating. Step back, decide which ONE of those picks is genuinely the strongest, leave that at the top of the band, and push the others down by 3-5 points. Confidence should spread across the 60-85 range, not cluster.
+
 MANDATORY NO SELECTION TRIGGERS (if ANY of these apply, output NO SELECTION):
 - Every serious contender has at least one unresolved red flag
 - The top contender's overall win% is below the field average AND they have no compensating class/conditions edge
 - The field has 3+ horses with near-identical form and stats profiles with no clear separator — it is a genuinely open race
-- Maiden races with 10+ runners and no standout on form/trials — these are lotteries
+- Maiden races with 10+ runners (any venue) — these are lotteries, no exceptions
+- 2YO or 3YO restricted black-type races (Group 1-3) with 12+ runners and no proven Track+Distance winner in the field — lightly-raced juvenile form is too noisy to claim an edge
+- BM66-and-below handicap races at ANY venue with 10+ runners — the bottom of the handicap ladder has too much noise for a 68+ confidence call
 - No horse in the field has won or placed at today's Track+Distance (all Track+Dist win% = 0) AND it is a provincial/country venue
 - The track condition has changed (per Step 7) and the change materially affects your pick's key advantage
+- marketSummary.hasLiquidity is false (totalMatched < AUD $20,000) AND you were relying on market data as your primary factor — illiquid markets are not trustworthy signals
 
 RED FLAGS:
 These are caution signals. Multiple red flags on the same horse = automatic NO SELECTION on that horse.
@@ -291,8 +319,10 @@ These are caution signals. Multiple red flags on the same horse = automatic NO S
 - Very low Track win% or Dist win% (<10%) with 5+ starts sample size
 - Deteriorating form across last 4+ starts with no clear excuse
 - 2+ NEGATIVE form badges present
-- assessment="big_rise" with no supporting class trend
+- classProfile assessment="big_rise" — HARD CONFIDENCE CAP of 65 regardless of other factors. If the horse has never contested this class level and has no stakes trial or black-type placing at similar grade, CAP at 62 or WITHDRAW.
 - Overall win% significantly below field average (>5% lower)
+- Short-priced favourite (market.backPrice < 2.80 AND market.isFavorite = true) with NO market-overlay primary factor — HARD CONFIDENCE CAP of 65. The market already agrees with you; there is no edge to exploit at that price. Backing short favourites without overlay is negative-EV.
+- Anti-bias running style: horse's speedMap runningStyle fights the day's confirmed track bias (e.g., back-marker on an inside-pace day). If Step 7 confirms the bias and your pick fights it, WITHDRAW.
 
 RED FLAG OVERRIDES (a red flag can be discounted when):
 - First-up: firstUp winPercent >15% OR placePercent >40% — proven fresh performer
@@ -328,7 +358,7 @@ Return ONLY valid JSON in this format:
     "step5_class_weight": "Class assessment using classProfile + raceClassFit data. Weight analysis with apprentice claims.",
     "step6_connections": "Jockey/trainer assessment with stats data. First-up/second-up stats for resuming horses.",
     "step7_intelligence": "X search: track condition verification (upgrades/downgrades), track bias, late changes. State findings or 'No real-time data found'.",
-    "step8_ml": "ML model cross-reference. Note agreement or disagreement with your assessment.",
+    "step8_ml_market": "ML model cross-reference AND Betfair market overlay assessment. State the overlayRatio and its interpretation. If illiquid or no market data, state 'Market data unavailable'.",
     "step9_devils_advocate": "MANDATORY: The strongest reason your pick could lose. Is it likely or theoretical? Confidence adjustment if any.",
     "step10_edge": "Final verdict: PRIMARY factor identified? TWO+ secondary factors? Red flags resolved? Devil's Advocate survived? If not, state NO SELECTION and why."
   },
@@ -344,6 +374,11 @@ Return ONLY valid JSON in this format:
       "classAssessment": "Class fit assessment from classProfile data.",
       "mlModelRank": 1,
       "mlWinProb": 0.283,
+      "marketBackPrice": 4.20,
+      "marketImpliedProb": 0.238,
+      "overlayRatio": 1.19,
+      "marketStatus": "overlay_lean | overlay_strong | no_edge | shorter_than_ml | illiquid | no_data",
+      "isMarketFavorite": false,
       "keyBadges": ["Last Start Winner (+)", "Track Specialist (+)", "Fitness: Race Hardened (+)"]
     }
   ]
@@ -360,7 +395,8 @@ Rules:
 - Do not fabricate X/real-time data. If no data exists, say so in step7_intelligence.
 - Confidence 75+ requires PROVEN record in today's specific conditions with data to back it.
 - ALWAYS provide ALL 10 analysis steps regardless of whether you make a selection.
-- mlModelRank, mlWinProb, and keyBadges may be null if data is not available.
+- mlModelRank, mlWinProb, marketBackPrice, marketImpliedProb, overlayRatio, and keyBadges may be null if data is not available.
+- When market data is unavailable, fall back to the non-market primary factors (Form, Conditions, ML, Class). Do NOT invent overlay ratios.
 - Most selections should score 62-72. Scores above 75 should be rare. Above 80 should be exceptional.`;
 
 // Parse form string into structured results (most recent run is rightmost)
@@ -442,6 +478,17 @@ function enrichRaceData(race) {
     }
   }
 
+  // Betfair market data — keyed by FormFav runner number
+  const marketData = race.marketData || null;
+  const marketByRunner = {};
+  if (marketData && Array.isArray(marketData.runners)) {
+    for (const m of marketData.runners) {
+      marketByRunner[m.formFavNumber] = m;
+    }
+  }
+  // Liquidity threshold: treat markets under AUD $20k matched as noise.
+  const marketHasLiquidity = !!(marketData && marketData.totalMatched >= 20000);
+
   // Enrich each runner
   const enrichedRunners = runners.map(r => {
     const formData = parseFormString(r.form);
@@ -461,6 +508,22 @@ function enrichRaceData(race) {
 
     // ML prediction for this runner
     const pred = predictionsByRunner[r.number] || null;
+
+    // Betfair market data for this runner + overlay vs ML win probability
+    const mk = marketByRunner[r.number] || null;
+    let overlayRatio = null;
+    if (marketHasLiquidity && mk && mk.impliedProb && pred && typeof pred.winProbability === 'number' && pred.winProbability > 0) {
+      overlayRatio = parseFloat((pred.winProbability / mk.impliedProb).toFixed(3));
+    }
+    const marketInfo = mk ? {
+      backPrice: mk.backPrice,
+      layPrice: mk.layPrice,
+      impliedProb: mk.impliedProb,
+      matchedVolume: mk.matchedVolume,
+      overlayRatio,                              // null when no ML prob or illiquid market
+      isFavorite: marketData && marketData.favorite && marketData.favorite.number === r.number,
+      matchType: mk.matchType,                   // 'exact' | 'fuzzy' | 'override' — confidence of the matching step itself
+    } : null;
 
     // Decorator summary
     let badgeSummary = null;
@@ -491,6 +554,7 @@ function enrichRaceData(race) {
       badgeSummary,
       jockeyStats,
       trainerStats,
+      market: marketInfo,
     };
   });
 
@@ -503,6 +567,16 @@ function enrichRaceData(race) {
     distanceCategory,
     trackBias,
     mlModelConfidence: predictions?.confidence || null,
+    marketSummary: marketData ? {
+      source: 'betfair_exchange_delayed',
+      marketId: marketData.marketId,
+      marketTime: marketData.marketTime,
+      status: marketData.status,
+      totalMatched: marketData.totalMatched,
+      hasLiquidity: marketHasLiquidity,
+      favorite: marketData.favorite,
+      unmatchedCount: (marketData.unmatchedRunners || []).length,
+    } : null,
     fieldAvg: {
       weight: parseFloat(avgWeight.toFixed(1)),
       winPct: parseFloat((avgWinPct * 100).toFixed(1)),
@@ -648,6 +722,22 @@ async function scrapeFormFav(tracks, raceFilter) {
   // and are safe to reuse across per-track scrape calls
   trackBiasCache = {};
 
+  // Phase 5: Betfair Exchange market data (optional — silently skipped if creds missing)
+  // One call at the top of the scrape fetches every AU meeting + catalogue for the date.
+  // Per-race fetches then pull prices from already-loaded market catalogues.
+  let betfairByTrack = null;
+  if (BETFAIR_ENABLED) {
+    try {
+      betfairByTrack = await betfairMarkets.fetchBetfairMeetings(date, { log: serverLog });
+      serverLog(`Betfair meetings resolved for ${betfairByTrack.size} venues`);
+    } catch (err) {
+      serverLog(`Betfair meetings fetch failed: ${err.message} — continuing without market data`);
+      betfairByTrack = null;
+    }
+  } else {
+    serverLog('Betfair integration disabled (missing env vars) — no market data will be attached');
+  }
+
   const allRaces = [];
   let skippedPast = 0;
 
@@ -679,6 +769,7 @@ async function scrapeFormFav(tracks, raceFilter) {
           numberOfRunners: data.numberOfRunners || 0,
           trackBiasData: null, // filled below after races loaded
           predictionsData: null, // filled below
+          marketData: null, // filled below from Betfair (optional)
           runners: data.runners
             .filter(r => !r.scratched) // Filter scratched runners
             .map(r => ({
@@ -745,6 +836,26 @@ async function scrapeFormFav(tracks, raceFilter) {
     // Phase 4: Fetch jockey/trainer stats for this track's races
     if (trackRaces.length > 0) {
       await fetchConnectionStats(trackRaces);
+    }
+
+    // Phase 5: Betfair market book (prices) per race — only if the meeting resolved
+    if (trackRaces.length > 0 && betfairByTrack) {
+      const meetingCtx = betfairMarkets.getMeetingContext(track, betfairByTrack, { log: serverLog });
+      if (meetingCtx) {
+        const marketResults = await Promise.all(
+          trackRaces.map(r => betfairMarkets.fetchBetfairMarket(meetingCtx, r.raceNumber, r.runners, { log: serverLog }))
+        );
+        let attached = 0;
+        for (let i = 0; i < trackRaces.length; i++) {
+          if (marketResults[i]) {
+            trackRaces[i].marketData = marketResults[i];
+            attached++;
+          }
+        }
+        if (attached > 0) {
+          serverLog(`Betfair markets attached for ${attached}/${trackRaces.length} races at ${track}`);
+        }
+      }
     }
   }
 
@@ -912,7 +1023,7 @@ Analyze this race step by step using the methodology. Search X for "${enriched.t
               step5_class_weight: 'Class & Weight',
               step6_connections: 'Connections',
               step7_intelligence: 'Real-Time Intelligence',
-              step8_ml: 'ML Model Cross-Reference',
+              step8_ml_market: 'ML Model & Market Cross-Reference',
               step9_devils_advocate: "Devil's Advocate",
               step10_edge: 'Edge Identification'
             };
@@ -1041,8 +1152,38 @@ app.get('/today-races', requireAuth, (req, res) => {
   res.json(latestRaces);
 });
 
+// Phase 5: Betfair diagnostics. Confirms creds are wired and session is alive.
+// Does NOT return any sensitive values — only booleans and counts.
+app.get('/betfair/health', requireAuth, async (req, res) => {
+  const envStatus = {
+    BETFAIR_APP_KEY: !!process.env.BETFAIR_APP_KEY,
+    BETFAIR_USERNAME: !!process.env.BETFAIR_USERNAME,
+    BETFAIR_PASSWORD: !!process.env.BETFAIR_PASSWORD,
+    BETFAIR_CERT_PEM: !!process.env.BETFAIR_CERT_PEM,
+    BETFAIR_KEY_PEM: !!process.env.BETFAIR_KEY_PEM,
+  };
+  if (!BETFAIR_ENABLED) {
+    return res.json({ enabled: false, envStatus, reason: 'one or more required env vars are missing' });
+  }
+  try {
+    const token = await betfairAuth.getSessionToken({ log: serverLog });
+    const sessionInfo = betfairAuth.getSessionInfo();
+    const requestStats = betfairClient.getRequestStats();
+    res.json({
+      enabled: true,
+      envStatus,
+      loginOk: !!token,
+      session: sessionInfo,
+      requests: requestStats,
+    });
+  } catch (err) {
+    serverLog(`Betfair health check failed: ${err.message}`);
+    res.status(500).json({ enabled: true, envStatus, loginOk: false, error: err.message });
+  }
+});
+
 app.get('/', (req, res) => {
-  res.json({ status: "ok", message: "EquiEdge Scraper running", version: "2.0" });
+  res.json({ status: "ok", message: "EquiEdge Scraper running", version: "2.1-betfair" });
 });
 
 module.exports = app;
