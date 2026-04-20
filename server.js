@@ -1632,6 +1632,11 @@ app.post('/api/user/record-usage', requireUserId, async (req, res) => {
   }
 });
 
+// GET /api/apple-notifications — Apple validates the URL before saving
+app.get('/api/apple-notifications', (req, res) => {
+  res.status(200).json({ status: 'ok' });
+});
+
 // POST /api/apple-notifications — App Store Server Notifications V2
 // Apple sends signed JWS payloads for subscription lifecycle events
 app.post('/api/apple-notifications', async (req, res) => {
