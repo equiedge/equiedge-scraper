@@ -1640,12 +1640,13 @@ app.get('/api/apple-notifications', (req, res) => {
 // POST /api/apple-notifications — App Store Server Notifications V2
 // Apple sends signed JWS payloads for subscription lifecycle events
 app.post('/api/apple-notifications', async (req, res) => {
-  if (!redis) return res.status(503).json({ error: 'Backend storage not configured' });
-
   const { signedPayload } = req.body || {};
   if (!signedPayload) {
-    return res.status(400).json({ error: 'Missing signedPayload' });
+    // Apple sends a test POST when validating the URL in App Store Connect — return 200
+    return res.status(200).json({ status: 'ok' });
   }
+
+  if (!redis) return res.status(503).json({ error: 'Backend storage not configured' });
 
   try {
     // Decode the JWS payload (Apple signs with their own keys)
