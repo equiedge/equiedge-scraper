@@ -1,2 +1,8 @@
 .vercel
 .env*.local
+betfair/.secrets/
+*.pem
+*.key
+*.crt
+samconfig.toml
+.aws-sam/

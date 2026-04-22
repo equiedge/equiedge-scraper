@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EquiEdge — Weekly Results</title>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0A0A0F;--bg2:#12121A;--card:#1A1A26;--emerald:#00DC82;--blue:#4A9EFF;--gold:#FFB800;--red:#FF4757;--t1:#F0F0F5;--t2:#8A8A9A;--t3:#55556A;--border:rgba(255,255,255,0.06)}
+body{background:var(--bg);color:var(--t1);font-family:'Outfit',sans-serif;min-height:100vh;padding:20px}
+.container{max-width:900px;margin:0 auto}
+h1{font-size:24px;font-weight:700;margin-bottom:4px}
+.subtitle{color:var(--t2);font-size:14px;margin-bottom:24px}
+.period{color:var(--t3);font-size:13px;font-family:'JetBrains Mono',monospace}
+.summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:28px}
+.stat-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;text-align:center}
+.stat-value{font-size:22px;font-weight:700;margin-bottom:2px}
+.stat-label{font-size:12px;color:var(--t2);text-transform:uppercase;letter-spacing:0.5px}
+.profit-pos{color:var(--emerald)}
+.profit-neg{color:var(--red)}
+h2{font-size:18px;font-weight:600;margin-bottom:14px;margin-top:28px}
+.bands{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:28px}
+.band-card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:14px}
+.band-label{font-size:13px;font-weight:600;color:var(--blue);margin-bottom:6px;font-family:'JetBrains Mono',monospace}
+.band-stats{font-size:12px;color:var(--t2);line-height:1.6}
+.band-profit{font-weight:600;font-size:14px;margin-top:4px}
+.table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;margin-bottom:40px}
+table{width:100%;border-collapse:collapse;font-size:13px;min-width:700px}
+th{background:var(--bg2);color:var(--t2);font-weight:500;text-align:left;padding:10px 8px;position:sticky;top:0;cursor:pointer;user-select:none;white-space:nowrap;font-size:11px;text-transform:uppercase;letter-spacing:0.5px}
+th:hover{color:var(--t1)}
+td{padding:10px 8px;border-bottom:1px solid var(--border);white-space:nowrap}
+tr:hover td{background:rgba(255,255,255,0.02)}
+.result-win{color:var(--emerald);font-weight:600}
+.result-loss{color:var(--red)}
+.result-scratched{color:var(--gold)}
+.result-unknown{color:var(--t3)}
+.empty{text-align:center;padding:60px 20px;color:var(--t2)}
+.empty h3{font-size:18px;margin-bottom:8px;color:var(--t1)}
+.loading{text-align:center;padding:80px 20px;color:var(--t2)}
+.footer{text-align:center;color:var(--t3);font-size:12px;padding:20px 0 40px}
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>EquiEdge Results</h1>
+  <div id="app" class="loading">Loading results...</div>
+  <div class="footer">EquiEdge &mdash; AI-Powered Horse Racing Analysis</div>
+</div>
+<script>
+(async function() {
+  const app = document.getElementById('app');
+  try {
+    const res = await fetch('/api/results/latest');
+    if (!res.ok) {
+      if (res.status === 404) {
+        app.innerHTML = '<div class="empty"><h3>No Results Yet</h3><p>Weekly results will appear here after the first published week.</p></div>';
+        return;
+      }
+      throw new Error('Failed to load results');
+    }
+    const data = await res.json();
+    render(data);
+  } catch (err) {
+    app.innerHTML = '<div class="empty"><h3>Unable to Load Results</h3><p>' + err.message + '</p></div>';
+  }
+
+  function render(data) {
+    const s = data.summary;
+    const profitClass = s.profit >= 0 ? 'profit-pos' : 'profit-neg';
+    const sign = s.profit >= 0 ? '+' : '';
+
+    let html = `
+      <div class="subtitle">${data.week}</div>
+      <div class="period">${data.periodStart} to ${data.periodEnd}</div>
+      <div class="summary-grid" style="margin-top:16px">
+        <div class="stat-card"><div class="stat-value">${s.totalBets}</div><div class="stat-label">Bets</div></div>
+        <div class="stat-card"><div class="stat-value">${s.wins}/${s.losses}</div><div class="stat-label">W/L</div></div>
+        <div class="stat-card"><div class="stat-value ${profitClass}">${sign}$${s.profit.toFixed(2)}</div><div class="stat-label">Profit</div></div>
+        <div class="stat-card"><div class="stat-value ${profitClass}">${sign}${(s.roi*100).toFixed(1)}%</div><div class="stat-label">ROI</div></div>
+        <div class="stat-card"><div class="stat-value">$${s.totalStaked.toFixed(0)}</div><div class="stat-label">Staked</div></div>
+      </div>
+    `;
+
+    if (data.confidenceBands && data.confidenceBands.length > 0) {
+      html += '<h2>Confidence Bands</h2><div class="bands">';
+      for (const b of data.confidenceBands) {
+        const bp = b.profit >= 0 ? 'profit-pos' : 'profit-neg';
+        const bs = b.profit >= 0 ? '+' : '';
+        html += `
+          <div class="band-card">
+            <div class="band-label">${b.band}</div>
+            <div class="band-stats">
+              ${b.bets} bets &middot; ${b.wins}W<br>
+              ${b.units}u &middot; $${b.staked} staked
+            </div>
+            <div class="band-profit ${bp}">${bs}$${b.profit.toFixed(2)} (${bs}${(b.roi*100).toFixed(1)}%)</div>
+          </div>
+        `;
+      }
+      html += '</div>';
+    }
+
+    if (data.rows && data.rows.length > 0) {
+      html += '<h2>Selections</h2><div class="table-wrap"><table id="results-table">';
+      html += '<thead><tr><th data-col="date">Date</th><th data-col="track">Track</th><th data-col="raceNumber">R#</th><th data-col="horseName">Horse</th><th data-col="confidence">Conf</th><th data-col="units">Units</th><th data-col="finalFixedOdds">Odds</th><th data-col="result">Result</th><th data-col="profit">P/L</th></tr></thead><tbody>';
+      for (const r of data.rows) {
+        const rc = r.result === 'win' ? 'result-win' : r.result === 'loss' ? 'result-loss' : r.result === 'scratched' ? 'result-scratched' : 'result-unknown';
+        const pp = r.profit > 0 ? 'profit-pos' : r.profit < 0 ? 'profit-neg' : '';
+        const ps = r.profit > 0 ? '+' : '';
+        html += `<tr>
+          <td>${r.date.slice(5)}</td>
+          <td>${r.track}</td>
+          <td>${r.raceNumber}</td>
+          <td>${r.horseName}</td>
+          <td>${r.confidence}</td>
+          <td>${r.units}</td>
+          <td>${r.finalFixedOdds != null ? r.finalFixedOdds.toFixed(2) : '-'}</td>
+          <td class="${rc}">${r.result}</td>
+          <td class="${pp}">${r.result === 'win' || r.result === 'loss' ? ps + '$' + r.profit.toFixed(2) : '-'}</td>
+        </tr>`;
+      }
+      html += '</tbody></table></div>';
+    }
+
+    app.className = '';
+    app.innerHTML = html;
+
+    // Simple column sorting
+    let sortCol = null, sortAsc = true;
+    document.querySelectorAll('#results-table th').forEach(th => {
+      th.addEventListener('click', () => {
+        const col = th.dataset.col;
+        if (sortCol === col) sortAsc = !sortAsc; else { sortCol = col; sortAsc = true; }
+        const tbody = document.querySelector('#results-table tbody');
+        const rows = Array.from(tbody.querySelectorAll('tr'));
+        rows.sort((a, b) => {
+          const ai = a.children[Array.from(th.parentNode.children).indexOf(th)].textContent;
+          const bi = b.children[Array.from(th.parentNode.children).indexOf(th)].textContent;
+          const an = parseFloat(ai), bn = parseFloat(bi);
+          if (!isNaN(an) && !isNaN(bn)) return sortAsc ? an - bn : bn - an;
+          return sortAsc ? ai.localeCompare(bi) : bi.localeCompare(ai);
+        });
+        rows.forEach(r => tbody.appendChild(r));
+      });
+    });
+  }
+})();
+</script>
+</body>
+</html>

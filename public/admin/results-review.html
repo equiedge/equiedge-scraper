@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>EquiEdge — Review Results</title>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0A0A0F;--bg2:#12121A;--card:#1A1A26;--emerald:#00DC82;--blue:#4A9EFF;--gold:#FFB800;--red:#FF4757;--t1:#F0F0F5;--t2:#8A8A9A;--t3:#55556A;--border:rgba(255,255,255,0.06)}
+body{background:var(--bg);color:var(--t1);font-family:'Outfit',sans-serif;min-height:100vh;padding:16px;padding-bottom:120px}
+.container{max-width:600px;margin:0 auto}
+h1{font-size:20px;font-weight:700;margin-bottom:4px}
+.week-label{color:var(--blue);font-size:14px;font-family:'JetBrains Mono',monospace;margin-bottom:16px}
+.summary-bar{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px}
+.summary-item{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 14px;font-size:13px}
+.summary-item strong{display:block;font-size:16px;margin-bottom:2px}
+.profit-pos{color:var(--emerald)}
+.profit-neg{color:var(--red)}
+
+.review-count{color:var(--gold);font-size:13px;margin-bottom:16px}
+.row-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:10px}
+.row-card.needs-review{border-color:var(--gold)}
+.row-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.row-horse{font-weight:600;font-size:15px}
+.row-meta{color:var(--t2);font-size:12px;font-family:'JetBrains Mono',monospace}
+.row-detail{font-size:13px;color:var(--t2);margin-bottom:8px}
+.row-fields{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+.field{display:flex;flex-direction:column;gap:2px}
+.field label{font-size:11px;color:var(--t3);text-transform:uppercase;letter-spacing:0.5px}
+.field input,.field select{background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:8px;color:var(--t1);font-size:14px;font-family:'JetBrains Mono',monospace}
+.field select{appearance:none;-webkit-appearance:none}
+.field input:focus,.field select:focus{outline:none;border-color:var(--blue)}
+.notes-field{margin-top:8px}
+.notes-field input{width:100%;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:8px;color:var(--t1);font-size:13px}
+.review-reason{color:var(--gold);font-size:12px;margin-top:6px}
+
+.actions{position:fixed;bottom:0;left:0;right:0;background:var(--bg2);border-top:1px solid var(--border);padding:14px 16px;display:flex;gap:10px;justify-content:center;z-index:10}
+.btn{border:none;border-radius:8px;padding:12px 24px;font-size:14px;font-weight:600;cursor:pointer;font-family:'Outfit',sans-serif}
+.btn-save{background:var(--blue);color:#fff}
+.btn-approve{background:var(--emerald);color:#0A0A0F}
+.btn-reject{background:var(--card);color:var(--red);border:1px solid var(--red)}
+.btn:disabled{opacity:0.4;cursor:not-allowed}
+.toast{position:fixed;top:20px;left:50%;transform:translateX(-50%);background:var(--card);color:var(--t1);padding:10px 20px;border-radius:8px;font-size:13px;display:none;z-index:20;border:1px solid var(--border)}
+.toast.show{display:block}
+.toast.error{border-color:var(--red);color:var(--red)}
+.loading{text-align:center;padding:60px 20px;color:var(--t2)}
+.error-msg{text-align:center;padding:60px 20px;color:var(--red)}
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Review Results</h1>
+  <div id="app" class="loading">Loading draft...</div>
+</div>
+<div class="toast" id="toast"></div>
+<div class="actions" id="actions" style="display:none">
+  <button class="btn btn-save" id="btn-save" onclick="saveDraft()">Save</button>
+  <button class="btn btn-approve" id="btn-approve" onclick="publishDraft()">Approve</button>
+  <button class="btn btn-reject" id="btn-reject" onclick="rejectDraft()">Reject</button>
+</div>
+
+<script>
+const params = new URLSearchParams(location.search);
+const week = params.get('week');
+const token = params.get('token');
+let draft = null;
+
+function showToast(msg, isError) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (isError ? ' error' : '');
+  setTimeout(() => t.className = 'toast', 3000);
+}
+
+async function apiFetch(path, opts = {}) {
+  const sep = path.includes('?') ? '&' : '?';
+  const url = `${path}${sep}week=${encodeURIComponent(week)}&token=${encodeURIComponent(token)}`;
+  const res = await fetch(url, opts);
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(body || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+async function loadDraft() {
+  const app = document.getElementById('app');
+  if (!week || !token) {
+    app.innerHTML = '<div class="error-msg">Missing week or token parameter.</div>';
+    return;
+  }
+  try {
+    draft = await apiFetch('/api/results/draft');
+    render();
+    document.getElementById('actions').style.display = 'flex';
+  } catch (err) {
+    app.innerHTML = '<div class="error-msg">' + err.message + '</div>';
+  }
+}
+
+function render() {
+  const app = document.getElementById('app');
+  const s = draft.summary;
+  const sign = s.profit >= 0 ? '+' : '';
+  const pc = s.profit >= 0 ? 'profit-pos' : 'profit-neg';
+  const reviewCount = draft.rows.filter(r => r.needsManualReview).length;
+
+  let html = `
+    <div class="week-label">${draft.week} &middot; ${draft.periodStart} to ${draft.periodEnd}</div>
+    <div class="summary-bar">
+      <div class="summary-item"><strong>${s.totalBets}</strong>bets</div>
+      <div class="summary-item"><strong>${s.wins}W / ${s.losses}L</strong>record</div>
+      <div class="summary-item"><strong class="${pc}">${sign}$${s.profit.toFixed(2)}</strong>profit</div>
+      <div class="summary-item"><strong class="${pc}">${sign}${(s.roi*100).toFixed(1)}%</strong>ROI</div>
+    </div>
+  `;
+
+  if (reviewCount > 0) {
+    html += `<div class="review-count">${reviewCount} row${reviewCount > 1 ? 's' : ''} need review</div>`;
+  }
+
+  draft.rows.forEach((r, i) => {
+    const nr = r.needsManualReview ? ' needs-review' : '';
+    html += `
+      <div class="row-card${nr}" id="row-${i}">
+        <div class="row-header">
+          <span class="row-horse">${r.horseName}</span>
+          <span class="row-meta">${r.date.slice(5)} ${r.track} R${r.raceNumber}</span>
+        </div>
+        <div class="row-detail">Conf ${r.confidence} &middot; ${r.units}u &middot; $${r.stake} staked${r.fixedOddsAtPick ? ' &middot; Pick odds ' + r.fixedOddsAtPick : ''}</div>
+        <div class="row-fields">
+          <div class="field">
+            <label>Result</label>
+            <select data-idx="${i}" data-field="result" onchange="rowChanged(this)">
+              <option value="win"${r.result==='win'?' selected':''}>Win</option>
+              <option value="loss"${r.result==='loss'?' selected':''}>Loss</option>
+              <option value="scratched"${r.result==='scratched'?' selected':''}>Scratched</option>
+              <option value="unknown"${r.result==='unknown'?' selected':''}>Unknown</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Final Odds</label>
+            <input type="number" step="0.01" min="1" data-idx="${i}" data-field="finalFixedOdds" value="${r.finalFixedOdds != null ? r.finalFixedOdds : ''}" onchange="rowChanged(this)" placeholder="-">
+          </div>
+          <div class="field">
+            <label>P/L</label>
+            <input type="text" value="${r.result==='win'||r.result==='loss' ? (r.profit>=0?'+':'')+'$'+r.profit.toFixed(2) : '-'}" disabled style="opacity:0.6">
+          </div>
+        </div>
+        <div class="notes-field">
+          <input type="text" placeholder="Notes..." data-idx="${i}" data-field="notes" value="${r.notes || ''}" onchange="rowChanged(this)">
+        </div>
+        ${r.reviewReason ? '<div class="review-reason">' + r.reviewReason + '</div>' : ''}
+      </div>
+    `;
+  });
+
+  app.className = '';
+  app.innerHTML = html;
+}
+
+function rowChanged(el) {
+  const idx = parseInt(el.dataset.idx);
+  const field = el.dataset.field;
+  let val = el.value;
+  if (field === 'finalFixedOdds') {
+    val = val ? parseFloat(val) : null;
+  }
+  draft.rows[idx][field] = val;
+
+  // Recompute P/L locally
+  const r = draft.rows[idx];
+  const stake = r.units * 10;
+  if (r.result === 'win' && r.finalFixedOdds) {
+    r.return = parseFloat((r.finalFixedOdds * stake).toFixed(2));
+    r.profit = parseFloat((r.return - stake).toFixed(2));
+  } else if (r.result === 'loss') {
+    r.return = 0;
+    r.profit = -stake;
+  } else {
+    r.return = 0;
+    r.profit = 0;
+  }
+
+  // Clear review flag if result is now set
+  if (field === 'result' && val !== 'unknown') {
+    r.needsManualReview = false;
+    r.reviewReason = null;
+  }
+}
+
+async function saveDraft() {
+  const btn = document.getElementById('btn-save');
+  btn.disabled = true;
+  try {
+    draft = await apiFetch('/api/results/draft', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rows: draft.rows }),
+    });
+    render();
+    showToast('Saved');
+  } catch (err) {
+    showToast('Save failed: ' + err.message, true);
+  }
+  btn.disabled = false;
+}
+
+async function publishDraft() {
+  if (!confirm('Publish these results to the public page?')) return;
+  const btn = document.getElementById('btn-approve');
+  btn.disabled = true;
+  try {
+    await apiFetch('/api/results/publish', { method: 'POST' });
+    showToast('Published!');
+    setTimeout(() => location.href = '/results.html', 1500);
+  } catch (err) {
+    showToast('Publish failed: ' + err.message, true);
+    btn.disabled = false;
+  }
+}
+
+async function rejectDraft() {
+  if (!confirm('Reject this draft? It won\'t be published.')) return;
+  const btn = document.getElementById('btn-reject');
+  btn.disabled = true;
+  try {
+    await apiFetch('/api/results/reject', { method: 'POST' });
+    showToast('Rejected');
+    document.getElementById('actions').style.display = 'none';
+  } catch (err) {
+    showToast('Reject failed: ' + err.message, true);
+    btn.disabled = false;
+  }
+}
+
+loadDraft();
+</script>
+</body>
+</html>

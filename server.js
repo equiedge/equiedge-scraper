@@ -7,6 +7,11 @@ const betfairMarkets = require('./betfair/markets');
 const betfairAuth = require('./betfair/auth');
 const betfairClient = require('./betfair/client');
 const { Redis } = require('@upstash/redis');
+const path = require('path');
+const { previousWeekRange, loadWeekMetroSelections } = require('./lib/results/selections');
+const { resolveSelections } = require('./lib/results/betfairResults');
+const { buildDraft, recomputeAggregates } = require('./lib/resultsBuilder');
+const email = require('./lib/email');
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -21,7 +26,7 @@ const redis = UPSTASH_ENABLED ? new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
   token: process.env.UPSTASH_REDIS_REST_TOKEN,
 }) : null;
-const CACHE_TTL_SECONDS = 18 * 60 * 60; // 18 hours
+const CACHE_TTL_SECONDS = 14 * 24 * 60 * 60; // 14 days
 
 let latestRaces = [];
 let serverLogs = [];
@@ -75,6 +80,69 @@ async function cacheSet(track, date, races) {
   } catch (err) {
     serverLog(`Cache write error for ${track}: ${err.message}`);
   }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Per-track scrape lock (prevents duplicate Grok calls when
+// multiple users request the same track simultaneously)
+// Key format: "lock:{track}_{YYYY-MM-DD}"
+// Value: timestamp string — auto-expires after 5 minutes
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const LOCK_TTL_SECONDS = 5 * 60; // 5 minutes — longer than any single-track scrape+Grok
+
+function scrapeLockKey(track, date) {
+  return `lock:${track.toLowerCase().replace(/\s+/g, '-')}_${date}`;
+}
+
+// Try to acquire the lock. Returns true if we got it, false if another request holds it.
+async function acquireScrapeLock(track, date) {
+  if (!redis) return true; // no Redis = no locking, proceed as before
+  try {
+    // SET NX = only set if key does not exist (atomic)
+    const result = await redis.set(scrapeLockKey(track, date), Date.now().toString(), { nx: true, ex: LOCK_TTL_SECONDS });
+    return result === 'OK';
+  } catch (err) {
+    serverLog(`Lock acquire error for ${track}: ${err.message}`);
+    return true; // on error, proceed rather than blocking
+  }
+}
+
+async function releaseScrapeLock(track, date) {
+  if (!redis) return;
+  try {
+    await redis.del(scrapeLockKey(track, date));
+  } catch (err) {
+    serverLog(`Lock release error for ${track}: ${err.message}`);
+  }
+}
+
+// Wait for another request to finish scraping a track, then return cached data.
+// Polls every 5s for up to 5 minutes. Returns cached races or null on timeout.
+async function waitForScrapeResult(track, date) {
+  const maxWait = LOCK_TTL_SECONDS * 1000;
+  const pollInterval = 5000;
+  const start = Date.now();
+  serverLog(`Waiting for in-progress scrape of ${track} to finish...`);
+  while (Date.now() - start < maxWait) {
+    await new Promise(r => setTimeout(r, pollInterval));
+    // Check if cache is now populated
+    const cached = await cacheGet(track, date);
+    if (cached) {
+      const parsed = typeof cached === 'string' ? JSON.parse(cached) : cached;
+      serverLog(`Scrape of ${track} completed by another request — got ${parsed.length} races from cache`);
+      return parsed;
+    }
+    // Check if lock was released (scrape finished but maybe no races to cache)
+    try {
+      const lockExists = await redis.exists(scrapeLockKey(track, date));
+      if (!lockExists) {
+        serverLog(`Lock released for ${track} but no cache found — will scrape`);
+        return null;
+      }
+    } catch { /* ignore, keep waiting */ }
+  }
+  serverLog(`Timed out waiting for ${track} scrape — will scrape independently`);
+  return null;
 }
 
 // In-memory caches for the current scrape session
@@ -241,6 +309,18 @@ CLASS ASSESSMENT (use classProfile + raceClassFit data):
 - withinOptimalRange=true: Race is within the class range where this horse performs best
 - classDifference: Positive = stepping up, negative = dropping. ±5 is minor, ±15+ is major.
 
+CLASS-RISE DETECTION (dual-gate — triggers HARD CONFIDENCE CAP of 65):
+A runner is CLASS_RISE if EITHER gate fires:
+  Gate 1: classDifference ≤ -5
+  Gate 2: raceClassRating − highestClassWon > 10 (catches horses whose currentRating has been bumped to match the race but who have NEVER WON within 10 points of it)
+peakRating does NOT satisfy Gate 2 — only highestClassWon counts. Placing at a level is not proof of winning at it.
+
+If raceClassFit.withinOptimalRange === false, do NOT label the assessment "comfort_zone" regardless of what raceClassFit.assessment says — use "outside optimal range" and carry this flag into Devil's Advocate (Step 9).
+
+"Emerging Talent" and "rising trend" badges may be cited as context but DO NOT override the 65-cap when Gate 2 triggers.
+
+When CLASS_RISE fires, the step5_class_weight output MUST state in numbers: currentRating / raceClassRating / highestClassWon / winningClassGap, and which gate (1, 2, or both) triggered.
+
 WEIGHT ASSESSMENT:
 Weight impact varies by distance:
 - Sprints (<1200m): weight is less impactful
@@ -359,7 +439,7 @@ These are caution signals. Multiple red flags on the same horse = automatic NO S
 - Very low Track win% or Dist win% (<10%) with 5+ starts sample size
 - Deteriorating form across last 4+ starts with no clear excuse
 - 2+ NEGATIVE form badges present
-- classProfile assessment="big_rise" — HARD CONFIDENCE CAP of 65 regardless of other factors. If the horse has never contested this class level and has no stakes trial or black-type placing at similar grade, CAP at 62 or WITHDRAW.
+- CLASS_RISE (dual-gate): HARD CONFIDENCE CAP of 65 if Gate 1 (classDifference ≤ -5) OR Gate 2 (raceClassRating − highestClassWon > 10) fires. If Gate 2 fires AND the horse has no stakes trial or black-type placing at or above raceClassRating, tighten the cap to 62 or WITHDRAW. "Emerging Talent" / "rising trend" badges do NOT override this cap.
 - Overall win% significantly below field average (>5% lower)
 - Short-priced favourite (market.backPrice < 2.80 AND market.isFavorite = true) with NO market-overlay primary factor — HARD CONFIDENCE CAP of 65. The market already agrees with you; there is no edge to exploit at that price. Backing short favourites without overlay is negative-EV.
 - Anti-bias running style: horse's speedMap runningStyle fights the day's confirmed track bias (e.g., back-marker on an inside-pace day). If Step 7 confirms the bias and your pick fights it, WITHDRAW.
@@ -1177,9 +1257,10 @@ app.all('/scrape-now', requireAuth, async (req, res) => {
 
     serverLog(`Scrape-now called (ai=${useAi}, tracks: ${tracks.join(', ')}${raceFilter ? ', filtered' : ''}${skipCache ? ', skip-cache' : ''})`);
 
-    // Check Upstash cache for each track (only when AI is requested and cache not skipped)
+    // Check Upstash cache (and scrape locks) for each track
     const cachedRaces = [];
     const uncachedTracks = [];
+    const lockedTracks = []; // tracks we acquired a lock for (must release on error)
     if (useAi && !skipCache) {
       for (const track of tracks) {
         const cached = await cacheGet(track, date);
@@ -1188,7 +1269,21 @@ app.all('/scrape-now', requireAuth, async (req, res) => {
           cachedRaces.push(...parsed);
           serverLog(`Cache HIT for ${track} (${parsed.length} races)`);
         } else {
-          uncachedTracks.push(track);
+          // Try to acquire scrape lock for this track
+          const gotLock = await acquireScrapeLock(track, date);
+          if (gotLock) {
+            uncachedTracks.push(track);
+            lockedTracks.push(track);
+          } else {
+            // Another request is already scraping this track — wait for it
+            const waitedRaces = await waitForScrapeResult(track, date);
+            if (waitedRaces) {
+              cachedRaces.push(...waitedRaces);
+            } else {
+              // Timed out or lock released with no cache — scrape it ourselves
+              uncachedTracks.push(track);
+            }
+          }
         }
       }
     } else {
@@ -1198,37 +1293,44 @@ app.all('/scrape-now', requireAuth, async (req, res) => {
     // Scrape only uncached tracks
     let freshRaces = [];
     if (uncachedTracks.length > 0) {
-      freshRaces = await scrapeFormFav(uncachedTracks, raceFilter);
-      if (useAi) {
-        const BATCH_SIZE = 4;
-        serverLog(`Running Grok AI analysis on ${freshRaces.length} races (batches of ${BATCH_SIZE})...`);
-        for (let i = 0; i < freshRaces.length; i += BATCH_SIZE) {
-          const batch = freshRaces.slice(i, i + BATCH_SIZE);
-          const batchNum = Math.floor(i / BATCH_SIZE) + 1;
-          const totalBatches = Math.ceil(freshRaces.length / BATCH_SIZE);
-          serverLog(`Batch ${batchNum}/${totalBatches}: ${batch.map(r => `${r.track} R${r.raceNumber}`).join(', ')}`);
-          const results = await Promise.all(batch.map(race => analyzeRaceWithGrok(race)));
-          for (let j = 0; j < batch.length; j++) {
-            batch[j].suggestions = results[j].selections;
-            batch[j].aiAnalysis = results[j].analysis;
+      try {
+        freshRaces = await scrapeFormFav(uncachedTracks, raceFilter);
+        if (useAi) {
+          const BATCH_SIZE = 4;
+          serverLog(`Running Grok AI analysis on ${freshRaces.length} races (batches of ${BATCH_SIZE})...`);
+          for (let i = 0; i < freshRaces.length; i += BATCH_SIZE) {
+            const batch = freshRaces.slice(i, i + BATCH_SIZE);
+            const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+            const totalBatches = Math.ceil(freshRaces.length / BATCH_SIZE);
+            serverLog(`Batch ${batchNum}/${totalBatches}: ${batch.map(r => `${r.track} R${r.raceNumber}`).join(', ')}`);
+            const results = await Promise.all(batch.map(race => analyzeRaceWithGrok(race)));
+            for (let j = 0; j < batch.length; j++) {
+              batch[j].suggestions = results[j].selections;
+              batch[j].aiAnalysis = results[j].analysis;
+            }
           }
-        }
-        const picksCount = freshRaces.filter(r => r.suggestions.length > 0).length;
-        const passCount = freshRaces.length - picksCount;
-        serverLog(`Grok AI complete — ${picksCount} picks, ${passCount} passes from ${freshRaces.length} races (${Math.round(passCount / freshRaces.length * 100)}% pass rate)`);
+          const picksCount = freshRaces.filter(r => r.suggestions.length > 0).length;
+          const passCount = freshRaces.length - picksCount;
+          serverLog(`Grok AI complete — ${picksCount} picks, ${passCount} passes from ${freshRaces.length} races (${Math.round(passCount / freshRaces.length * 100)}% pass rate)`);
 
-        // Write freshly analysed races to Upstash cache (grouped by track)
-        const byTrack = {};
-        for (const race of freshRaces) {
-          const slug = race.track.toLowerCase().replace(/\s+/g, '-');
-          if (!byTrack[slug]) byTrack[slug] = [];
-          byTrack[slug].push(race);
+          // Write freshly analysed races to Upstash cache (grouped by track)
+          const byTrack = {};
+          for (const race of freshRaces) {
+            const slug = race.track.toLowerCase().replace(/\s+/g, '-');
+            if (!byTrack[slug]) byTrack[slug] = [];
+            byTrack[slug].push(race);
+          }
+          for (const [slug, trackRaces] of Object.entries(byTrack)) {
+            await cacheSet(slug, date, trackRaces);
+          }
+        } else {
+          freshRaces.forEach(r => { r.suggestions = []; r.aiAnalysis = ""; });
         }
-        for (const [slug, trackRaces] of Object.entries(byTrack)) {
-          await cacheSet(slug, date, trackRaces);
+      } finally {
+        // Always release locks we acquired, even on error
+        for (const track of lockedTracks) {
+          await releaseScrapeLock(track, date);
         }
-      } else {
-        freshRaces.forEach(r => { r.suggestions = []; r.aiAnalysis = ""; });
       }
     }
 
@@ -1564,6 +1666,28 @@ app.get('/api/user/status', requireUserId, async (req, res) => {
   }
 });
 
+// DELETE /api/user/delete — permanently delete user account and all data
+// Header: Authorization: Bearer <userId>
+app.delete('/api/user/delete', requireUserId, async (req, res) => {
+  if (!redis) return res.status(503).json({ error: 'Backend storage not configured' });
+
+  try {
+    const user = await getUser(req.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Delete user record
+    await redis.del(`user:${req.userId}`);
+
+    serverLog(`Account deleted: ${req.userId}`);
+    res.json({ status: 'deleted' });
+  } catch (err) {
+    serverLog(`Account deletion error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/user/record-usage — record a track-day analysis
 // Header: Authorization: Bearer <userId>
 // Body: { trackSlug: "randwick", date: "2026-04-20" }
@@ -1808,8 +1932,260 @@ app.post('/api/admin/set-tier', async (req, res) => {
   }
 });
 
+// Serve static files from public/
+app.use(express.static(path.join(__dirname, 'public')));
+
 app.get('/', (req, res) => {
-  res.json({ status: "ok", message: "EquiEdge Scraper running", version: "2.2-subscription" });
+  res.json({ status: "ok", message: "EquiEdge Scraper running", version: "2.3-results" });
+});
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Weekly Results Automation
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// Middleware: validate Vercel cron secret
+function requireCron(req, res, next) {
+  const cronSecret = process.env.CRON_SECRET;
+  if (!cronSecret) return res.status(500).json({ error: 'CRON_SECRET not configured' });
+  const auth = req.headers['authorization'];
+  if (auth !== `Bearer ${cronSecret}`) {
+    return res.status(401).json({ error: 'Invalid cron secret' });
+  }
+  next();
+}
+
+// Middleware: validate HMAC review token from query params
+function requireReviewToken(req, res, next) {
+  const token = req.query.token;
+  const result = email.validateReviewToken(token);
+  if (!result.valid) {
+    return res.status(401).json({ error: result.reason });
+  }
+  req.reviewWeek = result.week;
+  next();
+}
+
+// 1. Vercel cron trigger — fires Lambda for the heavy job
+app.get('/api/cron/trigger-weekly-results', requireCron, async (req, res) => {
+  try {
+    const { weekLabel } = previousWeekRange();
+    const lambdaUrl = process.env.LAMBDA_FUNCTION_URL;
+    if (!lambdaUrl) return res.status(500).json({ error: 'LAMBDA_FUNCTION_URL not set' });
+
+    serverLog(`Cron trigger: firing Lambda for weekly results ${weekLabel}`);
+
+    // Fire-and-forget — don't await the full response
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    try {
+      await fetch(`${lambdaUrl}/api/jobs/build-weekly-results?week=${encodeURIComponent(weekLabel)}`, {
+        method: 'GET',
+        headers: { 'x-api-key': EQUIEDGE_API_KEY },
+        signal: controller.signal,
+      });
+    } catch (e) {
+      // AbortError is expected (fire-and-forget), real network errors are logged
+      if (e.name !== 'AbortError') serverLog(`Lambda trigger fetch error (non-fatal): ${e.message}`);
+    }
+    clearTimeout(timeout);
+
+    res.status(202).json({ status: 'triggered', week: weekLabel });
+  } catch (err) {
+    serverLog(`Cron trigger error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 2. Lambda-run heavy job: load selections, resolve via Betfair, build draft, email
+app.get('/api/jobs/build-weekly-results', requireAuth, async (req, res) => {
+  const weekParam = req.query.manualWeek || req.query.week;
+  const force = req.query.force === '1';
+  let weekLabel, startMon, endSun;
+
+  if (weekParam) {
+    // Parse manual week (YYYY-Www) — derive dates from it
+    weekLabel = weekParam;
+    const match = weekParam.match(/^(\d{4})-W(\d{2})$/);
+    if (!match) return res.status(400).json({ error: 'Invalid week format. Use YYYY-Www (e.g. 2026-W16)' });
+    // Compute Monday of that ISO week
+    const year = parseInt(match[1]);
+    const weekNum = parseInt(match[2]);
+    const jan4 = new Date(Date.UTC(year, 0, 4));
+    const dayOfWeek = jan4.getUTCDay() || 7;
+    const isoWeek1Mon = new Date(jan4);
+    isoWeek1Mon.setUTCDate(jan4.getUTCDate() - dayOfWeek + 1);
+    const mon = new Date(isoWeek1Mon);
+    mon.setUTCDate(isoWeek1Mon.getUTCDate() + (weekNum - 1) * 7);
+    const sun = new Date(mon);
+    sun.setUTCDate(mon.getUTCDate() + 6);
+    startMon = mon.toISOString().slice(0, 10);
+    endSun = sun.toISOString().slice(0, 10);
+  } else {
+    const range = previousWeekRange();
+    weekLabel = range.weekLabel;
+    startMon = range.startMon;
+    endSun = range.endSun;
+  }
+
+  const draftKey = `results_draft:${weekLabel}`;
+
+  try {
+    // Idempotency check
+    if (!force && redis) {
+      const existing = await redis.get(draftKey);
+      if (existing) {
+        serverLog(`Weekly results ${weekLabel}: draft already exists, skipping (use ?force=1 to rebuild)`);
+        return res.json({ status: 'already_exists', week: weekLabel });
+      }
+    }
+
+    serverLog(`Building weekly results for ${weekLabel} (${startMon} to ${endSun})...`);
+
+    // Step 1: Load selections from cache
+    const logger = { log: (msg) => serverLog(msg) };
+    const selections = await loadWeekMetroSelections({ startMon, endSun }, logger);
+    if (selections.length === 0) {
+      serverLog(`No metro selections found for ${weekLabel}`);
+      return res.json({ status: 'no_selections', week: weekLabel });
+    }
+    serverLog(`Loaded ${selections.length} selections, resolving via Betfair...`);
+
+    // Step 2: Resolve results via Betfair
+    await resolveSelections(selections, logger);
+
+    // Step 3: Build draft bundle
+    const draft = buildDraft(weekLabel, startMon, endSun, selections);
+
+    // Step 4: Store draft in Redis (no TTL — kept indefinitely)
+    if (redis) {
+      await redis.set(draftKey, JSON.stringify(draft));
+      serverLog(`Draft stored at ${draftKey}`);
+    }
+
+    // Step 5: Send review email
+    try {
+      await email.sendResultsReadyEmail(weekLabel, draft.summary, logger);
+    } catch (emailErr) {
+      serverLog(`Review email failed (non-fatal): ${emailErr.message}`);
+    }
+
+    res.json({ status: 'ok', week: weekLabel, summary: draft.summary });
+
+  } catch (err) {
+    serverLog(`Weekly results job failed for ${weekLabel}: ${err.message}`);
+    // Write error to Redis
+    if (redis) {
+      try {
+        await redis.set(`results_error:${weekLabel}`, JSON.stringify({
+          error: err.message,
+          stack: err.stack,
+          at: new Date().toISOString(),
+        }), { ex: 30 * 24 * 60 * 60 }); // 30 day TTL
+      } catch (_) {}
+    }
+    // Send failure email
+    try {
+      await email.sendFailureEmail(weekLabel, err.message + '\n' + err.stack, { log: (msg) => serverLog(msg) });
+    } catch (_) {}
+    res.status(500).json({ error: err.message, week: weekLabel });
+  }
+});
+
+// 3. Get draft for review
+app.get('/api/results/draft', requireReviewToken, async (req, res) => {
+  const week = req.query.week;
+  if (!week) return res.status(400).json({ error: 'Missing week parameter' });
+  if (!redis) return res.status(500).json({ error: 'Redis not configured' });
+
+  const data = await redis.get(`results_draft:${week}`);
+  if (!data) return res.status(404).json({ error: 'No draft found for this week' });
+
+  const draft = typeof data === 'string' ? JSON.parse(data) : data;
+  res.json(draft);
+});
+
+// 4. Edit draft rows + recompute aggregates
+app.patch('/api/results/draft', requireReviewToken, async (req, res) => {
+  const week = req.query.week;
+  if (!week) return res.status(400).json({ error: 'Missing week parameter' });
+  if (!redis) return res.status(500).json({ error: 'Redis not configured' });
+
+  const data = await redis.get(`results_draft:${week}`);
+  if (!data) return res.status(404).json({ error: 'No draft found for this week' });
+
+  let draft = typeof data === 'string' ? JSON.parse(data) : data;
+
+  // Apply row updates from request body
+  const { rows } = req.body;
+  if (rows && Array.isArray(rows)) {
+    draft.rows = rows;
+  }
+
+  // Recompute aggregates
+  draft = recomputeAggregates(draft);
+  await redis.set(`results_draft:${week}`, JSON.stringify(draft));
+
+  res.json(draft);
+});
+
+// 5. Publish draft
+app.post('/api/results/publish', requireReviewToken, async (req, res) => {
+  const week = req.query.week;
+  if (!week) return res.status(400).json({ error: 'Missing week parameter' });
+  if (!redis) return res.status(500).json({ error: 'Redis not configured' });
+
+  const data = await redis.get(`results_draft:${week}`);
+  if (!data) return res.status(404).json({ error: 'No draft found for this week' });
+
+  let draft = typeof data === 'string' ? JSON.parse(data) : data;
+  draft.status = 'published';
+  draft.publishedAt = new Date().toISOString();
+
+  // Store published copy + update latest
+  await redis.set(`results:published:${week}`, JSON.stringify(draft));
+  await redis.set('results:latest', JSON.stringify(draft));
+  // Update draft status
+  await redis.set(`results_draft:${week}`, JSON.stringify(draft));
+
+  serverLog(`Results published for ${week}`);
+  res.json({ status: 'published', week });
+});
+
+// 6. Reject draft
+app.post('/api/results/reject', requireReviewToken, async (req, res) => {
+  const week = req.query.week;
+  if (!week) return res.status(400).json({ error: 'Missing week parameter' });
+  if (!redis) return res.status(500).json({ error: 'Redis not configured' });
+
+  const data = await redis.get(`results_draft:${week}`);
+  if (!data) return res.status(404).json({ error: 'No draft found for this week' });
+
+  let draft = typeof data === 'string' ? JSON.parse(data) : data;
+  draft.status = 'rejected';
+  await redis.set(`results_draft:${week}`, JSON.stringify(draft));
+
+  serverLog(`Results rejected for ${week}`);
+  res.json({ status: 'rejected', week });
+});
+
+// 7. Public: get latest published results
+app.get('/api/results/latest', async (req, res) => {
+  if (!redis) return res.status(500).json({ error: 'Redis not configured' });
+  const data = await redis.get('results:latest');
+  if (!data) return res.status(404).json({ error: 'No results published yet' });
+  const results = typeof data === 'string' ? JSON.parse(data) : data;
+  res.json(results);
+});
+
+// 8. Public: get a specific published week
+app.get('/api/results/published', async (req, res) => {
+  const week = req.query.week;
+  if (!week) return res.status(400).json({ error: 'Missing week parameter' });
+  if (!redis) return res.status(500).json({ error: 'Redis not configured' });
+  const data = await redis.get(`results:published:${week}`);
+  if (!data) return res.status(404).json({ error: 'No published results for this week' });
+  const results = typeof data === 'string' ? JSON.parse(data) : data;
+  res.json(results);
 });
 
 module.exports = app;

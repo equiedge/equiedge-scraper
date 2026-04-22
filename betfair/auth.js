@@ -17,6 +17,7 @@
 
 const https = require('https');
 const axios = require('axios');
+const certs = require('./certs');
 
 const DEFAULT_IDENTITY_URL = 'https://identitysso-cert.betfair.com/api/certlogin';
 const SESSION_TTL_MS = 3.5 * 60 * 60 * 1000; // 3h 30m
@@ -32,14 +33,8 @@ function redact(token) {
 }
 
 function buildHttpsAgent() {
-  const cert = process.env.BETFAIR_CERT_PEM;
-  const key = process.env.BETFAIR_KEY_PEM;
-  if (!cert || !key) {
-    throw new Error('BETFAIR_CERT_PEM and BETFAIR_KEY_PEM must be set');
-  }
-  // Vercel env vars sometimes escape newlines — normalise both cases.
-  const normalisedCert = cert.replace(/\\n/g, '\n');
-  const normalisedKey = key.replace(/\\n/g, '\n');
+  const normalisedCert = certs.cert;
+  const normalisedKey = certs.key;
   return new https.Agent({
     cert: normalisedCert,
     key: normalisedKey,
